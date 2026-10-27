@@ -17,3 +17,6 @@ local-env.ps1
 !.env.example
 .DS_Store
 Thumbs.db
+dist/
+__pycache__/
+*.py[cod]

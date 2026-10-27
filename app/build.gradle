@@ -1,0 +1,32 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'ru.focusguard'
+    compileSdk 36
+    defaultConfig {
+        applicationId 'ru.focusguard'
+        minSdk 26
+        targetSdk 36
+        versionCode 6
+        versionName '0.1.5'
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    buildTypes { release { minifyEnabled false } }
+    lint { abortOnError true }
+}
+
+tasks.register('compileCoreChecks', JavaCompile) {
+    source fileTree('src/main/java/ru/focusguard/core') { include '**/*.java' }
+    source fileTree('src/coreTest/java') { include '**/*.java' }
+    classpath = files()
+    destinationDirectory = layout.buildDirectory.dir('coreChecks')
+    sourceCompatibility = '17'
+    targetCompatibility = '17'
+    options.encoding = 'UTF-8'
+}
+tasks.register('coreCheck', JavaExec) {
+    dependsOn 'compileCoreChecks'
+    classpath = files(layout.buildDirectory.dir('coreChecks'))
+    mainClass = 'ru.focusguard.core.CoreChecks'
+    args file('src/main/assets/nsfw-domains.txt').absolutePath
+}

@@ -1,0 +1,41 @@
+FocusGuard 0.1.5 - build verification
+Date: 2026-10-27 (Europe/Moscow)
+Package: ru.focusguard; versionCode 6; minSdk 26; target/compile SDK 36
+AGP 8.13.2; Gradle 8.13; JDK 17
+assembleDebug: PASS
+lintDebug: PASS (0 errors, 13 warnings)
+coreCheck: PASS (223 behavioral checks + 10000 malformed DNS packets)
+85 new checks cover daily sessions, confirmation tokens and browser native UI.
+Bundled list: 90159 domains; content hash checked in built APK
+Signature: APK Signature Scheme v2 verified
+Signing certificate SHA-256: ce10316317e5a582e6a80e8af2d08e82dffb20a41ed44de6b1853cdc575734c4
+Same signing certificate as previous versions: verified
+APK SHA-256: 88e809ad7fbbc011df6b8522e167fca9e3822708cbcc0385ac3b47bf3c10e3b6
+
+Removed Back button from overlay. Added explicit session-start confirmation for
+VK, Telegram, YouTube and LANGAME. Inspection and preview never start a timer;
+the only start call is in the confirmation handler, after fresh foreground/rule
+checks. Group and calendar-slot mismatch reject stale confirmation.
+Active sessions continue without another prompt. Messaging outside schedule is
+unrestricted. Existing hourly/weekly preference keys are retained for upgrades.
+
+YouTube has one continuous 30-minute local-calendar-day session shared by the
+official app and identified website. Midnight cuts a late session short; reboot
+consumes a started day. Shorts/domain/manual/full-app denials precede the offer.
+
+Yandex native bottom address bars: candidate IDs, native toolbar ancestry,
+accessibility descriptions and constrained footer fallback. Document subtrees
+and tab previews are excluded. Tests use synthetic UI element descriptions,
+including the screenshot host shape; they are not tests on installed Yandex.
+Known YouTube origin can survive recognized fullscreen with hidden toolbar;
+the old path is discarded, so strict hidden-path Shorts policy is preserved.
+Session overlay scrolls on small/landscape screens. Actual app-window selection
+also handles focus being taken by the accessibility overlay.
+
+Not tested on physical Samsung A54 or emulator. Actual One UI/Yandex resource
+IDs, visibility, confirmation interactions, fullscreen recognition and timing
+must be checked on device. An inaccessible browser origin can bypass web rules;
+strict hidden-path mode may also block ordinary YouTube pages/fullscreen.
+Overlay does not suspend another process or guarantee pausing its audio.
+Disabled accessibility and other system paths remain bypasses.
+Install over the previous app to retain preferences and recovery code.

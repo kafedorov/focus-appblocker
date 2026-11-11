@@ -5,6 +5,10 @@ import java.util.Set;
 
 /** Browser chrome only; document nodes must be excluded by the Android tree adapter. */
 public final class BrowserAddress {
+    public static final String BLANK_PAGE = "about:blank";
+    private static final Set<String> EDITOR_IDS = Set.of("url_bar", "location_bar_edit_text",
+        "mozac_browser_toolbar_edit_url_view", "url_field", "search_src_text", "address_bar", "url_edittext",
+        "bro_omnibar_edit", "bro_omnibar_edit_text", "bro_omnibox_edit_text");
     private static final Set<String> IDS = Set.of("url_bar", "location_bar_edit_text", "mozac_browser_toolbar_url_view",
         "mozac_browser_toolbar_edit_url_view", "url_field", "search_src_text", "address_bar", "url_edittext", "url",
         "custom_tabs_url_bar", "custom_tabs_origin", "custom_tabs_toolbar_url", "location_bar_url",
@@ -29,8 +33,20 @@ public final class BrowserAddress {
         String id = shortId(resourceId);
         return id.contains("tab_switcher") || id.contains("tab_grid") || id.contains("tab_card") || id.contains("tabs_list");
     }
+    public static boolean editorId(String pkg, String resourceId) {
+        String id = shortId(resourceId);
+        return EDITOR_IDS.contains(id) || (yandex(pkg) && (id.startsWith("bro_omnibar_") || id.startsWith("bro_omnibox_")));
+    }
     public static BrowserPage read(String pkg, Element element, int screenLeft, int screenTop, int screenRight, int screenBottom) {
-        if (!element.visible() || element.editing() || element.document() || element.tabList()) return null;
+        if (!addressLabel(pkg, element, screenLeft, screenTop, screenRight, screenBottom)) return null;
+        return prefer(parseLabel(element.text()), parseLabel(element.description()));
+    }
+    public static boolean blank(String pkg, Element element, int screenLeft, int screenTop, int screenRight, int screenBottom) {
+        return addressLabel(pkg, element, screenLeft, screenTop, screenRight, screenBottom)
+            && (BLANK_PAGE.equals(label(element.text())) || BLANK_PAGE.equals(label(element.description())));
+    }
+    private static boolean addressLabel(String pkg, Element element, int screenLeft, int screenTop, int screenRight, int screenBottom) {
+        if (!element.visible() || element.editing() || element.document() || element.tabList()) return false;
         String id = shortId(element.id());
         boolean known = IDS.contains(id) || (yandex(pkg) && (id.startsWith("bro_omnibar_") || id.startsWith("bro_omnibox_")));
         int width = screenRight - screenLeft, height = screenBottom - screenTop;
@@ -38,9 +54,7 @@ public final class BrowserAddress {
             && element.className().endsWith("TextView") && element.right() - element.left() >= width / 4
             && element.bottom() > element.top() && element.bottom() - element.top() <= height / 9
             && element.top() >= screenTop + height * 2 / 3 && element.bottom() <= screenBottom;
-        if (!known && !(yandex(pkg) && (element.toolbar() || footer))) return null;
-        BrowserPage text = parseLabel(element.text()), description = parseLabel(element.description());
-        return prefer(text, description);
+        return known || (yandex(pkg) && (element.toolbar() || footer));
     }
     public static BrowserPage prefer(BrowserPage current, BrowserPage candidate) {
         if (candidate == null) return current;
@@ -52,13 +66,14 @@ public final class BrowserAddress {
         return last != null && last.youtube() && document && !editing && !toolbar && !tabs
             ? new BrowserPage(last.host(), "") : null;
     }
-    private static BrowserPage parseLabel(String value) {
+    private static BrowserPage parseLabel(String value) { return BrowserPage.parse(label(value)); }
+    private static String label(String value) {
         if (value == null) return null;
         // Some native bars prefix their accessibility description. Never search arbitrary prose.
         String label = value.trim();
         for (String prefix : new String[]{"Адрес: ", "Адрес сайта: ", "Адрес страницы: ", "Address: ", "URL: "}) {
             if (label.regionMatches(true, 0, prefix, 0, prefix.length())) { label = label.substring(prefix.length()); break; }
         }
-        return BrowserPage.parse(label);
+        return label;
     }
 }

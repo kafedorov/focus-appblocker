@@ -9,13 +9,21 @@ public final class AdultBlocklist {
     private static volatile SuffixDomains domains;
     private static volatile String error = "";
     private static boolean loading;
-    public static synchronized void warmUp(Context context) {
-        if (loading || domains != null) return;
+    private static final java.util.List<Runnable> listeners = new java.util.ArrayList<>();
+    public static void warmUp(Context context) { warmUp(context, null); }
+    public static synchronized void warmUp(Context context, Runnable ready) {
+        if (domains != null || !error.isEmpty()) return;
+        if (ready != null) listeners.add(ready);
+        if (loading) return;
         loading = true; Context app = context.getApplicationContext();
         new Thread(() -> {
             try (InputStreamReader reader = new InputStreamReader(app.getAssets().open("nsfw-domains.txt"), StandardCharsets.UTF_8)) {
                 domains = new SuffixDomains(reader);
             } catch (Exception e) { error = "Локальная база сайтов не загрузилась"; }
+            synchronized (AdultBlocklist.class) {
+                for (Runnable listener : listeners) listener.run();
+                listeners.clear();
+            }
         }, "adult-domains").start();
     }
     public static boolean blocks(String host) { SuffixDomains list = domains; return list != null && list.blocks(host); }

@@ -8,7 +8,12 @@ import java.time.temporal.TemporalAdjusters;
 /** Read-only offers. Only an explicit, still-current confirmation may start a session. */
 public final class SessionGate {
     public enum Status { FREE, AVAILABLE, ACTIVE, BLOCKED }
-    public record Access(String key, Status status, long slot, long remainingMillis, LocalDateTime nextWindow) {}
+    public record Access(String key, Status status, long slot, long remainingMillis, LocalDateTime nextWindow,
+                         long budgetRemainingMillis) {
+        public Access(String key, Status status, long slot, long remainingMillis, LocalDateTime nextWindow) {
+            this(key, status, slot, remainingMillis, nextWindow, remainingMillis);
+        }
+    }
     public static Access hourly(String key, int start, int end, int minutes, LocalDateTime now,
                                 long elapsed, int boot, SessionPolicy.State old) {
         SessionPolicy.Result result = SessionPolicy.evaluate(start, end, minutes, now, elapsed, boot, old, false);
@@ -42,11 +47,12 @@ public final class SessionGate {
             case EXHAUSTED, DAY_BLOCKED -> Status.BLOCKED;
         };
         long slot = now.toLocalDate().minusDays(now.getDayOfWeek().getValue() - 1L).toEpochDay();
-        LocalDateTime next = now.toLocalDate().with(TemporalAdjusters.next(DayOfWeek.SATURDAY)).atStartOfDay();
+        LocalDateTime next = now.toLocalDate().with(TemporalAdjusters.next(DayOfWeek.MONDAY)).atStartOfDay();
         return new Access("langame", status, slot, result.remainingMillis(), next);
     }
     public static boolean canConfirm(Access offered, Access current) {
         return offered != null && current != null && offered.status() == Status.AVAILABLE
-            && current.status() == Status.AVAILABLE && offered.key().equals(current.key()) && offered.slot() == current.slot();
+            && current.status() == Status.AVAILABLE && offered.key().equals(current.key()) && offered.slot() == current.slot()
+            && (offered.key().equals("langame") || offered.budgetRemainingMillis() == current.budgetRemainingMillis());
     }
 }

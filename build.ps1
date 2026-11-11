@@ -14,5 +14,5 @@ $taskProperty = 'sdk.dir=' + $SdkRoot.Replace('\', '/').Replace(':', '\:')
 & (Join-Path $PSScriptRoot 'gradlew.bat') --console=plain assembleDebug lintDebug coreCheck
 if ($LASTEXITCODE -ne 0) { throw 'Build or verification failed.' }
 New-Item -ItemType Directory -Path (Join-Path $PSScriptRoot 'apk') -Force | Out-Null
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'app\build\outputs\apk\debug\app-debug.apk') -Destination (Join-Path $PSScriptRoot 'apk\FocusGuard-0.1.5-debug.apk')
-Write-Host 'APK ready: apk\FocusGuard-0.1.5-debug.apk'
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'app\build\outputs\apk\debug\app-debug.apk') -Destination (Join-Path $PSScriptRoot 'apk\FocusGuard-0.1.12-debug.apk')
+Write-Host 'APK ready: apk\FocusGuard-0.1.12-debug.apk'

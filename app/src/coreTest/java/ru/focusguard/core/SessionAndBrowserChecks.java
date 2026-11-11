@@ -7,7 +7,7 @@ public final class SessionAndBrowserChecks {
     private static int count;
     private static void check(boolean value, String name) { count++; if (!value) throw new AssertionError(name); }
     private static LocalDateTime at(String value) { return LocalDateTime.parse(value); }
-    public static int run() { count = 0; daily(); confirmation(); browser(); return count; }
+    public static int run() { count = 0; daily(); confirmation(); budgets(); morning(); browser(); return count; }
     private static void daily() {
         LocalDateTime noon = at("2026-10-27T12:00:00");
         var preview = DailySessionPolicy.evaluate(noon, 1000, 1, null, false);
@@ -60,13 +60,55 @@ public final class SessionAndBrowserChecks {
         check(daily.nextWindow().equals(at("2026-10-28T00:00:00")), "daily offer states next calendar day");
         check(!SessionGate.canConfirm(daily, SessionGate.daily(now.plusDays(1), 1000, 1, null)), "stale midnight offer cannot silently start tomorrow");
         check(SessionGate.canConfirm(daily, SessionGate.daily(now.plusHours(1), 1000, 1, null)), "YouTube offer same day survives hour change");
-        var weekday = SessionGate.weekly(now, 1, 1, null);
-        check(weekday.status() == SessionGate.Status.BLOCKED && weekday.nextWindow().equals(at("2026-10-31T00:00:00")), "LANGAME weekday closed until Saturday");
-        var saturday = SessionGate.weekly(at("2026-10-31T12:00:00"), 1, 1, null);
-        check(saturday.status() == SessionGate.Status.AVAILABLE && saturday.remainingMillis() == 600_000 && saturday.nextWindow().equals(at("2026-11-07T00:00:00")), "Saturday offer states next Saturday");
-        check(!SessionGate.canConfirm(saturday, SessionGate.weekly(at("2026-11-07T12:00:00"), 1, 1, null)), "stale weekly confirmation rejected");
-        check(!SessionGate.canConfirm(saturday, SessionGate.weekly(at("2026-11-01T00:00:00"), 1, 1, null)), "Saturday confirmation cannot start on Sunday");
-        check(SessionGate.weekly(at("2026-10-31T23:59:00"), 1, 1, null).remainingMillis() == 60000, "LANGAME prompt shows short session near midnight");
+        var friday = SessionGate.weekly(at("2026-10-30T12:00:00"), 1, 1, null);
+        check(friday.status() == SessionGate.Status.BLOCKED && friday.nextWindow().equals(at("2026-11-02T00:00:00")), "LANGAME Friday closed until Monday");
+        var monday = SessionGate.weekly(at("2026-10-26T12:00:00"), 1, 1, null);
+        check(monday.status() == SessionGate.Status.AVAILABLE && monday.remainingMillis() == 600_000 && monday.nextWindow().equals(at("2026-11-02T00:00:00")), "Monday offer states next week");
+        check(!SessionGate.canConfirm(monday, SessionGate.weekly(at("2026-11-02T12:00:00"), 1, 1, null)), "stale weekly confirmation rejected");
+        check(!SessionGate.canConfirm(monday, friday), "weekly offer cannot start on Friday");
+        check(SessionGate.weekly(at("2026-10-29T23:59:00"), 1, 1, null).remainingMillis() == 60_000, "LANGAME prompt respects Friday boundary");
+    }
+    private static void budgets() {
+        long minute = BudgetPolicy.MINUTE;
+        LocalDateTime start = at("2026-10-27T12:00:00");
+        var tg = BudgetPolicy.access("telegram", start, 1000, 1, null);
+        check(tg.status() == SessionGate.Status.AVAILABLE && tg.remainingMillis() == 10 * minute, "Telegram starts with ten minutes");
+        var part = BudgetPolicy.reserve(tg, tg, 3 * minute, 1000, 1);
+        var running = BudgetPolicy.access("telegram", start.plusMinutes(1), 61_000, 1, part);
+        check(running.status() == SessionGate.Status.ACTIVE && running.remainingMillis() == 2 * minute, "active time runs continuously");
+        check(BudgetPolicy.reserve(tg, running, minute, 61_000, 1) == null, "double confirmation rejected");
+        var left = BudgetPolicy.access("telegram", start.plusMinutes(3), 181_000, 1, part);
+        check(left.status() == SessionGate.Status.AVAILABLE && left.remainingMillis() == 7 * minute, "unreserved minutes remain");
+        check(BudgetPolicy.reserve(tg, left, minute, 181_000, 1) == null, "old offer cannot reserve against changed balance");
+        var second = BudgetPolicy.reserve(left, left, 7 * minute, 181_000, 1);
+        check(BudgetPolicy.access("telegram", start.plusMinutes(10), 601_000, 1, second).status() == SessionGate.Status.BLOCKED, "hourly budget exhausted");
+        check(BudgetPolicy.access("telegram", start.plusMinutes(1), 1000, 2, part).remainingMillis() == 7 * minute, "reboot ends the reservation and keeps remaining budget");
+        check(BudgetPolicy.access("telegram", start.plusHours(1), 3_601_000, 1, second).remainingMillis() == 10 * minute, "fresh hourly budget");
+        check(BudgetPolicy.access("telegram", at("2026-10-27T02:00:00"), 1, 1, null).remainingMillis() == 10 * minute, "no free hours overnight");
+        var nearHour = BudgetPolicy.access("telegram", start.plusMinutes(59), 1, 1, null);
+        check(nearHour.remainingMillis() == minute && BudgetPolicy.reserve(tg, nearHour, 2 * minute, 1, 1) == null, "cannot reserve beyond the hour");
+        var vk = BudgetPolicy.access("vk", start, 1000, 1, null);
+        check(vk.remainingMillis() == 5 * minute && BudgetPolicy.reserve(tg, vk, minute, 1000, 1) == null, "VK daily budget independent of Telegram");
+        var vkClosed = BudgetPolicy.access("vk", at("2026-10-27T20:00:00"), 1, 1, null);
+        check(vkClosed.status() == SessionGate.Status.BLOCKED && vkClosed.nextWindow().equals(at("2026-10-28T10:00:00")), "VK strict night begins at 20:00");
+        check(BudgetPolicy.access("vk", at("2026-10-27T09:59:00"), 1, 1, null).status() == SessionGate.Status.BLOCKED, "VK strict night lasts until 10:00");
+        check(BudgetPolicy.access("vk", at("2026-10-27T19:58:00"), 1, 1, null).remainingMillis() == 2 * minute, "VK cannot cross 20:00");
+        var yt = BudgetPolicy.access("youtube", at("2026-10-27T08:00:00"), 1000, 1, null);
+        check(yt.remainingMillis() == 30 * minute, "YouTube opens at 08:00");
+        check(BudgetPolicy.access("youtube", at("2026-10-28T00:00:00"), 1, 1, null).status() == SessionGate.Status.BLOCKED, "YouTube strict block starts at midnight");
+        check(BudgetPolicy.access("youtube", at("2026-10-27T23:59:30"), 1, 1, null).remainingMillis() == 30_000, "YouTube final seconds can be used without passing midnight");
+        check(BudgetPolicy.access("telegram", start.minusHours(1), 1000, 1, part).status() == SessionGate.Status.BLOCKED, "calendar rollback cannot reopen past hour");
+    }
+    private static void morning() {
+        var unlock = at("2026-10-27T07:40:00");
+        long day = unlock.toLocalDate().toEpochDay();
+        check(!MorningPolicy.firstUnlock(at("2026-10-27T05:59:00"), 360, day - 1), "early unlock does not start morning delay");
+        check(MorningPolicy.firstUnlock(at("2026-10-27T06:00:00"), 360, day - 1), "threshold unlock starts the delay");
+        check(!MorningPolicy.firstUnlock(unlock.plusMinutes(5), 360, day), "another unlock cannot restart today's delay");
+        check(MorningPolicy.firstUnlock(unlock.plusDays(1), 360, day), "next day may start a new delay");
+        check(!MorningPolicy.firstUnlock(unlock.minusDays(1), 360, day), "date rollback does not recreate an earlier morning");
+        check(MorningPolicy.remaining(1_800_000, 1_799_000) == 1000, "morning delay retains last second");
+        check(MorningPolicy.remaining(1_800_000, 1_800_000) == 0, "morning delay ends on time");
     }
     private static BrowserAddress.Element bar(String id, String text, String description, boolean document, boolean toolbar, boolean tabs, int top) {
         return new BrowserAddress.Element(id, "android.widget.TextView", text, description, true, false, document, toolbar, tabs, 120, top, 480, top + 50);
@@ -94,6 +136,16 @@ public final class SessionAndBrowserChecks {
         var fullPath = read(pkg, bar("bro_omnibar_address", "m.youtube.com", "Адрес: https://m.youtube.com/shorts/123", false, true, false, 1060));
         check(fullPath != null && fullPath.hasPagePath() && fullPath.shortsDecision(true, false, true) == BrowserPage.ShortsDecision.BLOCK_SHORTS, "native description restores full Shorts path");
         check(read(pkg, bar("url_bar", "Ссылка на example.com в тексте", null, false, true, false, 1060)) == null, "no arbitrary prose extraction");
+        var blank = bar("url_bar", null, "Адрес: about:blank", false, true, false, 100);
+        check(BrowserAddress.blank("com.android.chrome", blank, 0, 52, 590, 1220), "native bar confirms blank page");
+        var blankInput = new BrowserAddress.Element("url_bar", "android.widget.EditText", "about:blank", null,
+            true, true, false, true, false, 0, 0, 500, 50);
+        check(!BrowserAddress.blank("com.android.chrome", blankInput, 0, 52, 590, 1220), "typed destination does not confirm navigation");
+        var blankDocument = bar("url_bar", "about:blank", null, true, false, false, 100);
+        check(!BrowserAddress.blank("com.android.chrome", blankDocument, 0, 52, 590, 1220), "site content cannot confirm navigation");
+        check(BrowserAddress.editorId("com.android.chrome", "com.android.chrome:id/url_bar"), "Chrome native address input");
+        check(BrowserAddress.editorId(pkg, "com.yandex.browser:id/bro_omnibar_edit_text"), "Yandex native address input");
+        check(!BrowserAddress.editorId("com.android.chrome", "comment_edit_text"), "unrelated editors cannot receive a destination");
         check(BrowserAddress.documentRoot("android.webkit.WebView", "") && BrowserAddress.documentRoot("org.chromium.content.browser.ContentView", ""), "document roots are skipped before traversal");
         check(!BrowserAddress.documentRoot("android.widget.FrameLayout", "android:id/content"), "activity content does not hide native chrome");
         check(BrowserAddress.toolbarId("com.yandex.browser:id/bro_omnibar") && BrowserAddress.tabListId("com.yandex.browser:id/tab_grid"), "toolbar and tab ancestry identified");

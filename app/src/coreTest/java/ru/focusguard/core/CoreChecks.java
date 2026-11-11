@@ -128,6 +128,65 @@ public final class CoreChecks {
         check(UninstallGuard.evaluate("com.android.settings", java.util.Arrays.asList(ui("Фокус", false), ui("О приложении", false), ui("Удалить", true))) == UninstallGuard.Decision.APP_INFO, "own app-info intercepted before confirmation");
         check(UninstallGuard.evaluate("com.android.settings", java.util.Arrays.asList(ui("Фокус", false), ui("Сведения о приложении", false), ui("Удалить", true))) == UninstallGuard.Decision.APP_INFO, "Samsung alternate app-info title");
         check(UninstallGuard.evaluate("com.android.settings", java.util.Arrays.asList(ui("Фокус", false), ui("App info", false), ui("Uninstall", true))) == UninstallGuard.Decision.APP_INFO, "English app info");
+        var stopDialog = new UninstallGuard.Scan("com.android.settings");
+        stopDialog.add(ui("Принудительно остановить", false));
+        stopDialog.add(ui("Принудительная остановка приложения может привести к ошибкам.", false));
+        stopDialog.add(ui("Отмена", true));
+        stopDialog.add(ui("Да", true));
+        check(stopDialog.decision() == UninstallGuard.Decision.FORCE_STOP, "Samsung stop dialog is caught on cold entry without an app name");
+        var earlyStop = new UninstallGuard.Scan("com.android.settings");
+        earlyStop.add(ui("Принудительно остановить", false));
+        check(earlyStop.decision() == UninstallGuard.Decision.ALLOW, "force stop title alone needs dialog context");
+        earlyStop.markDialogWindow();
+        check(earlyStop.decision() == UninstallGuard.Decision.FORCE_STOP, "dialog event with only the title is enough");
+        stopDialog.add(ui("Фокус", false));
+        check(stopDialog.decision() == UninstallGuard.Decision.FORCE_STOP, "named stop dialog can be identified directly");
+        var stopButton = new UninstallGuard.Scan("com.android.settings");
+        stopButton.add(ui("Принудительно остановить", true));
+        check(!stopButton.isForceStopDialog(), "force-stop control alone is not a dialog");
+        var siteStop = new UninstallGuard.Scan("com.android.chrome");
+        siteStop.add(ui("Force stop?", false));
+        siteStop.markDialogWindow();
+        check(siteStop.decision() == UninstallGuard.Decision.ALLOW, "browser text cannot impersonate Settings");
+        check(UninstallGuard.cancelControl("Отмена") && !UninstallGuard.cancelControl("Да"), "only the cancellation control is eligible");
+        var installed = new UninstallGuard.Scan("com.android.settings");
+        installed.add(ui("Установленные приложения", false));
+        installed.add(ui("Фокус — блокировка отвлечений", true));
+        installed.add(ui("Включено", false));
+        check(installed.decision() == UninstallGuard.Decision.ALLOW, "installed accessibility services list stays open");
+        var focusService = new UninstallGuard.Scan("com.android.settings");
+        focusService.add(ui("Фокус — блокировка отвлече…", false));
+        focusService.add(ui("Ярлык Фокус — блокировка отвлечений", true));
+        check(focusService.decision() == UninstallGuard.Decision.ACCESSIBILITY, "One UI Focus accessibility details are protected");
+        var aospService = new UninstallGuard.Scan("com.android.settings");
+        aospService.add(ui("Фокус — блокировка отвлечений", false));
+        aospService.markSwitch();
+        check(aospService.decision() == UninstallGuard.Decision.ACCESSIBILITY, "Focus service title with switch identifies the details page");
+        var otherService = new UninstallGuard.Scan("com.android.settings");
+        otherService.add(ui("Voice Access", false));
+        otherService.markSwitch();
+        check(otherService.decision() == UninstallGuard.Decision.ALLOW, "other accessibility service stays accessible");
+        check(UninstallGuard.evaluate("com.android.settings", java.util.List.of(ui("Отключить службу «Фокус — блокировка отвлечений»?", false)))
+            == UninstallGuard.Decision.DISABLE_ACCESSIBILITY, "named Focus service stop confirmation is protected");
+        check(UninstallGuard.evaluate("com.android.settings", java.util.List.of(ui("Отключить службу Voice Access?", false)))
+            == UninstallGuard.Decision.ALLOW, "other accessibility stop confirmation stays accessible");
+        var samsungDisable = java.util.List.of(ui("Выключить Фокус — блокировка отвлечений?", true), ui("Отмена", true), ui("Выключить", true));
+        check(UninstallGuard.evaluate("com.android.settings", samsungDisable) == UninstallGuard.Decision.DISABLE_ACCESSIBILITY,
+            "exact One UI disable confirmation works without reading the underlying service page");
+        check(UninstallGuard.evaluate("com.android.settings", java.util.List.of(ui("Выключить Voice Access?", false), ui("Выключить", true)))
+            == UninstallGuard.Decision.ALLOW, "other service disable dialog stays available");
+        var mixedRemoval = new java.util.ArrayList<>(target);
+        mixedRemoval.add(ui("Принудительная остановка приложения может привести к ошибкам.", false));
+        check(UninstallGuard.evaluate("com.android.settings", mixedRemoval) == UninstallGuard.Decision.UNINSTALL,
+            "known Focus uninstall confirmation retains priority");
+        var samsungStop = new UninstallGuard.Scan("com.android.settings");
+        samsungStop.add(ui("Принудительная остановка приложения может\nпривести к ошибкам.", true));
+        check(samsungStop.decision() == UninstallGuard.Decision.FORCE_STOP, "Samsung stop message may be exposed on an actionable container");
+        var untitledCard = java.util.List.of(ui("Фокус", false), ui("Разрешения", false), ui("Использование данных", false), ui("Остановить", true));
+        check(UninstallGuard.evaluate("com.android.settings", untitledCard) == UninstallGuard.Decision.APP_INFO, "untitled Focus card with force stop is protected");
+        check(UninstallGuard.evaluate("com.android.settings", untitledCard.subList(0, 3)) == UninstallGuard.Decision.ALLOW, "general Settings with incomplete evidence stays accessible");
+        check(UninstallGuard.evaluate("com.android.settings", java.util.List.of(ui("LANGAME", false), ui("Разрешения", false),
+            ui("Использование данных", false), ui("Остановить", true))) == UninstallGuard.Decision.ALLOW, "other untitled app card stays accessible");
         check(UninstallGuard.evaluate("com.android.settings", java.util.Arrays.asList(ui("LANGAME", false), ui("О приложении", false), ui("Удалить", true))) == UninstallGuard.Decision.ALLOW, "other app-info is accessible");
         check(UninstallGuard.evaluate("com.android.packageinstaller", java.util.Arrays.asList(ui("LANGAME", false), ui("Хотите удалить это приложение?", false), ui("OK", true))) == UninstallGuard.Decision.ALLOW, "other removal accessible");
         check(UninstallGuard.evaluate("com.android.settings", java.util.Arrays.asList(ui("Удалить приложение «Фокус»?", false))) == UninstallGuard.Decision.UNINSTALL, "quoted title recognized before buttons appear");
@@ -137,13 +196,13 @@ public final class CoreChecks {
         check(UninstallGuard.evaluate("ru.focusguard", target) == UninstallGuard.Decision.ALLOW, "recovery always accessible");
         check(UninstallGuard.evaluate("com.android.permissioncontroller", java.util.Arrays.asList(ui("Фокус", false), ui("Разрешить", true), ui("Запретить", true))) == UninstallGuard.Decision.ALLOW, "permission consent accessible");
         check(UninstallGuard.evaluate("com.android.settings", java.util.Arrays.asList(ui("Фокус", false), ui("Разрешения", false), ui("Удалить", true))) == UninstallGuard.Decision.ALLOW, "unrelated settings need explicit app-info context");
-        check(UninstallGuard.evaluate("com.android.settings", java.util.Arrays.asList(ui("Фокус", false), ui("О приложении", false), ui("Удалить", false))) == UninstallGuard.Decision.ALLOW, "disabled uninstall control insufficient for app-info");
+        check(UninstallGuard.evaluate("com.android.settings", java.util.Arrays.asList(ui("Фокус", false), ui("О приложении", false), ui("Удалить", false))) == UninstallGuard.Decision.APP_INFO, "app-info protected with disabled uninstall control");
         check(UninstallGuard.evaluate("com.android.packageinstaller", java.util.Arrays.asList(ui("Фокус", false))) == UninstallGuard.Decision.ALLOW, "app label alone insufficient");
         check(UninstallGuard.evaluate("com.android.settings", java.util.Arrays.asList(ui("Фокус", false), ui("Do you want to uninstall this app?", false))) == UninstallGuard.Decision.UNINSTALL, "English confirmation");
         check(UninstallGuard.evaluate("com.android.settings", java.util.Arrays.asList(ui("ru.focusguard", false), ui("Хотите удалить это приложение?", false))) == UninstallGuard.Decision.UNINSTALL, "package label fallback");
         check(UninstallGuard.evaluate("com.android.settings", java.util.Arrays.asList(ui(null, true), ui("", false))) == UninstallGuard.Decision.ALLOW, "empty labels safe");
         var incremental = new UninstallGuard.Scan("com.android.settings");
-        incremental.add(ui("О приложении", false)); incremental.add(ui("Удалить", true));
+        incremental.add(ui("О приложении", false));
         check(incremental.decision() == UninstallGuard.Decision.ALLOW, "streaming scan waits for own identity");
         incremental.add(ui("Фокус", false));
         check(incremental.decision() == UninstallGuard.Decision.APP_INFO, "streaming scan identifies before remaining nodes");
@@ -153,39 +212,39 @@ public final class CoreChecks {
             check(UninstallGuard.evaluate("com.android.packageinstaller", labels) == UninstallGuard.Decision.UNINSTALL, "node order independent");
     }
     private static void weeklyChecks() {
-        for (String date : new String[]{"2026-10-26", "2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30", "2026-11-01"}) {
+        for (String date : new String[]{"2026-10-30", "2026-10-31", "2026-11-01"}) {
             var denied = weekly(date + "T12:00", 1000, 1, null, true);
-            check(denied.status() == WeeklySessionPolicy.Status.DAY_BLOCKED && denied.state() == null, "Langame denies non-Saturday without consuming: " + date);
+            check(denied.status() == WeeklySessionPolicy.Status.DAY_BLOCKED && denied.state() == null, "Langame denies Friday through Sunday without consuming: " + date);
         }
-        var preview = weekly("2026-10-31T10:00", 1000, 1, null, false);
+        var preview = weekly("2026-10-26T10:00", 1000, 1, null, false);
         check(preview.status() == WeeklySessionPolicy.Status.AVAILABLE && preview.state() == null, "Langame preview does not consume session");
-        var first = weekly("2026-10-31T10:00", 1000, 1, null, true);
-        check(first.status() == WeeklySessionPolicy.Status.ACTIVE && first.remainingMillis() == 600_000, "Langame first Saturday launch");
-        check(weekly("2026-10-31T10:02", 121000, 1, first.state(), true).remainingMillis() == 480_000, "Langame reopening does not restart timer");
-        check(weekly("2026-10-31T10:10", 601000, 1, first.state(), true).status() == WeeklySessionPolicy.Status.EXHAUSTED, "Langame exact ten-minute deadline");
-        check(weekly("2026-10-31T11:00", 3_601000, 1, first.state(), true).status() == WeeklySessionPolicy.Status.EXHAUSTED, "new hour cannot reset weekly session");
-        check(weekly("2026-10-31T23:00", 46_801000, 1, first.state(), true).status() == WeeklySessionPolicy.Status.EXHAUSTED, "second session same Saturday denied");
+        var first = weekly("2026-10-26T10:00", 1000, 1, null, true);
+        check(first.status() == WeeklySessionPolicy.Status.ACTIVE && first.remainingMillis() == 600_000, "Langame first Monday launch");
+        check(weekly("2026-10-26T10:02", 121000, 1, first.state(), true).remainingMillis() == 480_000, "Langame reopening does not restart timer");
+        check(weekly("2026-10-26T10:10", 601000, 1, first.state(), true).status() == WeeklySessionPolicy.Status.EXHAUSTED, "Langame exact ten-minute deadline");
+        check(weekly("2026-10-26T11:00", 3_601000, 1, first.state(), true).status() == WeeklySessionPolicy.Status.EXHAUSTED, "new hour cannot reset weekly session");
+        check(weekly("2026-10-26T23:00", 46_801000, 1, first.state(), true).status() == WeeklySessionPolicy.Status.EXHAUSTED, "second session same week denied");
         var sunday = weekly("2026-11-01T00:00", 50_401000, 1, first.state(), true);
         check(sunday.status() == WeeklySessionPolicy.Status.DAY_BLOCKED && sunday.state().equals(first.state()), "Sunday keeps consumed state");
-        var next = weekly("2026-11-07T00:00", 60_001000, 1, first.state(), true);
-        check(next.status() == WeeklySessionPolicy.Status.ACTIVE && next.remainingMillis() == 600_000, "next Saturday refreshes session");
+        var next = weekly("2026-11-02T00:00", 60_001000, 1, first.state(), true);
+        check(next.status() == WeeklySessionPolicy.Status.ACTIVE && next.remainingMillis() == 600_000, "next Monday refreshes session");
         check(next.state().weekStart() - first.state().weekStart() == 7, "weekly key is a seven-day calendar interval");
-        var nextPreview = weekly("2026-11-07T12:00", 70_001000, 1, first.state(), false);
+        var nextPreview = weekly("2026-11-02T12:00", 70_001000, 1, first.state(), false);
         check(nextPreview.status() == WeeklySessionPolicy.Status.AVAILABLE && nextPreview.state().equals(first.state()), "next week preview does not overwrite prior state");
-        check(weekly("2026-10-31T10:02", 2000, 2, first.state(), true).status() == WeeklySessionPolicy.Status.EXHAUSTED, "reboot cannot buy another weekly session");
-        check(weekly("2026-11-07T12:00", 2000, 2, first.state(), true).status() == WeeklySessionPolicy.Status.ACTIVE, "next week still available after reboot");
-        check(weekly("2026-10-31T10:02", 500, 1, first.state(), true).status() == WeeklySessionPolicy.Status.EXHAUSTED, "monotonic clock rollback denied");
-        check(weekly("2026-10-31T09:00", 601000, 1, first.state(), true).status() == WeeklySessionPolicy.Status.EXHAUSTED, "wall-clock rollback cannot extend used session");
-        check(weekly("2026-10-31T12:00", 60_002000, 1, next.state(), true).status() == WeeklySessionPolicy.Status.EXHAUSTED, "calendar week rollback denied");
-        var late = weekly("2026-10-31T23:55", 1000, 1, null, true);
-        check(late.status() == WeeklySessionPolicy.Status.ACTIVE && late.remainingMillis() == 300_000, "late Saturday session capped at midnight");
-        check(weekly("2026-10-31T23:59:59", 300000, 1, late.state(), true).remainingMillis() == 1000, "one second before Sunday");
-        check(weekly("2026-11-01T00:00", 301000, 1, late.state(), true).status() == WeeklySessionPolicy.Status.DAY_BLOCKED, "unfinished session does not enter Sunday");
-        check(weekly("2026-10-31T00:00", 1000, 1, null, true).remainingMillis() == 600_000, "Saturday midnight opens window");
-        check(weekly("2026-10-31T23:59", 1000, 1, null, false).remainingMillis() == 60_000, "late preview shows only available Saturday time");
-        check(weekly("2026-11-21T12:00", 1000, 2, first.state(), true).remainingMillis() == 600_000, "unused weeks do not accumulate time");
-        var yearEnd = weekly("2026-12-26T12:00", 1000, 1, null, true);
-        check(weekly("2027-01-02T12:00", 80_000000, 1, yearEnd.state(), true).remainingMillis() == 600_000, "week reset across year boundary");
+        check(weekly("2026-10-26T10:02", 2000, 2, first.state(), true).status() == WeeklySessionPolicy.Status.EXHAUSTED, "reboot cannot buy another weekly session");
+        check(weekly("2026-11-02T12:00", 2000, 2, first.state(), true).status() == WeeklySessionPolicy.Status.ACTIVE, "next week still available after reboot");
+        check(weekly("2026-10-26T10:02", 500, 1, first.state(), true).status() == WeeklySessionPolicy.Status.EXHAUSTED, "monotonic clock rollback denied");
+        check(weekly("2026-10-26T09:00", 601000, 1, first.state(), true).status() == WeeklySessionPolicy.Status.EXHAUSTED, "wall-clock rollback cannot extend used session");
+        check(weekly("2026-10-26T12:00", 60_002000, 1, next.state(), true).status() == WeeklySessionPolicy.Status.EXHAUSTED, "calendar week rollback denied");
+        var late = weekly("2026-10-29T23:55", 1000, 1, null, true);
+        check(late.status() == WeeklySessionPolicy.Status.ACTIVE && late.remainingMillis() == 300_000, "late Thursday session capped at midnight");
+        check(weekly("2026-10-29T23:59:59", 300000, 1, late.state(), true).remainingMillis() == 1000, "one second before Friday");
+        check(weekly("2026-10-30T00:00", 301000, 1, late.state(), true).status() == WeeklySessionPolicy.Status.DAY_BLOCKED, "unfinished session does not enter Friday");
+        check(weekly("2026-10-29T00:00", 1000, 1, null, true).remainingMillis() == 600_000, "Thursday midnight opens window");
+        check(weekly("2026-10-29T23:59", 1000, 1, null, false).remainingMillis() == 60_000, "late preview shows only available Thursday time");
+        check(weekly("2026-11-16T12:00", 1000, 2, first.state(), true).remainingMillis() == 600_000, "unused weeks do not accumulate time");
+        var yearEnd = weekly("2026-12-28T12:00", 1000, 1, null, true);
+        check(weekly("2027-01-04T12:00", 80_000000, 1, yearEnd.state(), true).remainingMillis() == 600_000, "week reset across year boundary");
     }
     private static byte[] dns(String host) {
         ByteArrayOutputStream out = new ByteArrayOutputStream(); out.writeBytes(new byte[]{0x12,0x34,1,0,0,1,0,0,0,0,0,0});

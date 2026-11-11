@@ -93,7 +93,7 @@ public final class MainActivity extends Activity {
     }
     private boolean editable() {
         if (!store.locked()) return true;
-        new AlertDialog.Builder(this).setTitle("Настройки защищены").setMessage("Изменения доступны после 24 часов ожидания или по коду восстановления. Открой раздел «Защита».").setPositiveButton("Понятно", null).show(); return false;
+        new AlertDialog.Builder(this).setTitle("Настройки защищены").setMessage("Введи код восстановления в разделе «Защита», чтобы изменить настройки.").setPositiveButton("Понятно", null).show(); return false;
     }
     private void toggle(LinearLayout parent, String title, String key, boolean fallback) {
         Switch control = new Switch(this); control.setText(title); control.setTextColor(INK); control.setTextSize(16); control.setPadding(0, dp(14), 0, dp(14)); control.setChecked(store.bool(key, fallback));
@@ -111,15 +111,15 @@ public final class MainActivity extends Activity {
         toggle(status, "Защита включена", "enabled", true);
         button(status, "Включить проверку открытых приложений", this::accessibilityConsent);
         LinearLayout sessions = card("Твои сеансы");
-        paragraph(sessions, clock(store.number("start", 420)) + "–" + clock(store.number("end", 1140)) + " · " + store.number("minutes", 10) + " минут отдельно для каждого мессенджера в час. Вне расписания доступ свободный.");
+        paragraph(sessions, "ВК · 5 минут в день с 10:00 до 20:00. Telegram · 10 минут на каждый календарный час круглосуточно.");
         vkState = label("", 16, INK); telegramState = label("", 16, INK); sessions.addView(vkState); sessions.addView(telegramState);
-        paragraph(sessions, "Перед новым сеансом появится вопрос с длительностью и временем следующего доступа. Таймер начнётся только после «Начать сеанс». Выход не останавливает его. Новый календарный час даёт новый сеанс; у границы часа или конца расписания он будет короче.");
+        paragraph(sessions, "Выбери длительность и нажми «Начать сеанс». Выбранное время списывается сразу, выход не ставит таймер на паузу. Остаток можно использовать позже в пределах того же часа или дня.");
         LinearLayout daily = card("YouTube · 30 минут в день");
         youtubeState = label("", 16, INK); youtubeState.setPadding(0, dp(12), 0, dp(8)); daily.addView(youtubeState);
-        paragraph(daily, "Один непрерывный сеанс в день после подтверждения. Общий для приложения YouTube и его сайта в поддерживаемом браузере. Выход не останавливает таймер. В полночь начинается новый день; Shorts остаются запрещены.");
+        paragraph(daily, "YouTube закрыт с 00:00 до 08:00. Если веб-версия разрешена, сайт и приложение используют общий бюджет. Shorts регулируются отдельно.");
         LinearLayout weekly = card("LANGAME · раз в неделю");
         langameState = label("", 16, INK); langameState.setPadding(0, dp(12), 0, dp(8)); weekly.addView(langameState);
-        paragraph(weekly, "Только в субботу по времени телефона: один непрерывный сеанс на 10 минут. Он начинается после подтверждения и заканчивается через 10 минут или в полночь, если она наступит раньше. Выход из приложения не ставит таймер на паузу.");
+        paragraph(weekly, "С понедельника по четверг доступен один непрерывный сеанс на 10 минут. Выход не останавливает таймер. С наступлением пятницы доступ закрывается.");
         LinearLayout vpn = card("Сайты и твой VPN");
         paragraph(vpn, "Маски доменов проверяются в адресной строке поддерживаемых браузеров даже при другом VPN. DNS-фильтр дополняет эту проверку, но занимает единственное VPN-подключение.");
         button(vpn, "Включить DNS-фильтр", this::prepareVpn);
@@ -127,7 +127,10 @@ public final class MainActivity extends Activity {
         button(vpn, "Открыть настройки VPN", () -> startActivity(new Intent(Settings.ACTION_VPN_SETTINGS)));
         LinearLayout setup = card("На Samsung Galaxy A54");
         paragraph(setup, "После установки APK Android может потребовать разрешить ограниченные настройки в карточке приложения. Для работы в фоне выбери для Фокуса расход батареи «Без ограничений» и добавь его в «Никогда не спящие приложения». Названия пунктов зависят от версии One UI.");
-        button(setup, "Карточка приложения", () -> startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName()))));
+        button(setup, "Карточка приложения", () -> {
+            if (store.bool("enabled", true) && store.bool("uninstall_guard", false) && !editable()) return;
+            startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName())));
+        });
     }
     private void refreshStatus() {
         if (health != null) {
@@ -150,41 +153,30 @@ public final class MainActivity extends Activity {
         if (youtubeState != null) youtubeState.setText(youtubeText());
     }
     private String sessionText(String group) {
-        if (!store.bool("enabled", true) || !store.bool("schedule", true)) return "без ограничений";
-        SessionGate.Access result = store.access(group);
-        return switch(result.status()) {
-            case FREE -> "свободный доступ"; case AVAILABLE -> "сеанс ждёт подтверждения";
-            case BLOCKED -> "следующее окно доступа — в новом часу или вне расписания";
-            case ACTIVE -> String.format(Locale.ROOT, "осталось %d:%02d", result.remainingMillis() / 60_000, result.remainingMillis() / 1000 % 60);
+        if (!store.bool("enabled", true) || !store.bool("schedule", true)) return "лимит выключен";
+        return accessText(store.access(group));
+    }
+    private String accessText(SessionGate.Access access) {
+        return switch (access.status()) {
+            case FREE -> "свободный доступ";
+            case AVAILABLE -> "остаток бюджета " + elapsedText(access.budgetRemainingMillis());
+            case ACTIVE -> "до конца сеанса " + elapsedText(access.remainingMillis());
+            case BLOCKED -> "следующий доступ " + access.nextWindow().format(java.time.format.DateTimeFormatter.ofPattern("dd.MM HH:mm"));
         };
     }
+    private String elapsedText(long millis) { return String.format(Locale.ROOT, "%d:%02d", millis / 60_000, millis / 1000 % 60); }
     private String clock(int minutes) { return String.format(Locale.ROOT, "%02d:%02d", minutes / 60, minutes % 60); }
     private String youtubeText() {
         if (!store.bool("enabled", true)) return "Защита приостановлена";
         if (store.bool("youtube_all", false) || store.set("blocked").contains("com.google.android.youtube")) return "Для приложения действует полный запрет";
-        if (!store.bool("youtube_daily", true)) return "Дневное ограничение выключено";
-        SessionGate.Access access = store.access("youtube");
-        String text = switch (access.status()) {
-            case AVAILABLE -> "Сегодняшний сеанс ждёт подтверждения";
-            case ACTIVE -> String.format(Locale.ROOT, "Осталось %d:%02d", access.remainingMillis() / 60_000, access.remainingMillis() / 1000 % 60);
-            case BLOCKED -> "Следующий сеанс — завтра с 00:00";
-            case FREE -> "Без ограничений";
-        };
-        if (!GuardAccessibilityService.connected) text += "\nДля ограничения нужно включить проверку открытых приложений";
-        return text;
+        String web = store.bool("youtube_web", true) ? "Веб-версия закрыта. " : "";
+        if (!store.bool("youtube_daily", true)) return web + "Дневной лимит выключен. Ночной блок действует с 00:00 до 08:00.";
+        return web + accessText(store.access("youtube"));
     }
     private String langameText() {
         if (!store.bool("enabled", true) || !store.bool("langame_weekly", true)) return "Недельное ограничение выключено";
         if (store.set("blocked").contains(AppCatalog.LANGAME_PACKAGE)) return "Действует ручной запрет. Для сеанса выбери для LANGAME правило «Автоматически».";
-        SessionGate.Access result = store.access("langame");
-        String status = switch (result.status()) {
-            case AVAILABLE -> "Субботний сеанс ещё не начат";
-            case BLOCKED -> "Закрыт. Следующий доступ: " + result.nextWindow().format(java.time.format.DateTimeFormatter.ofPattern("dd.MM HH:mm"));
-            case FREE -> "Без ограничений";
-            case ACTIVE -> String.format(Locale.ROOT, "Осталось %d:%02d", result.remainingMillis() / 60_000, result.remainingMillis() / 1000 % 60);
-        };
-        if (!GuardAccessibilityService.connected) status += "\nДля ограничения нужно включить проверку открытых приложений";
-        return status;
+        return accessText(store.access("langame"));
     }
     private EditText field(LinearLayout parent, String value, String hint) {
         EditText edit = new EditText(this); edit.setText(value); edit.setHint(hint); edit.setTextColor(INK); edit.setTextSize(16); parent.addView(edit, new LinearLayout.LayoutParams(-1, -2)); return edit;
@@ -192,27 +184,33 @@ public final class MainActivity extends Activity {
     private void rules() {
         title("Правила", "Настрой под свой день. Для блокировок по экрану нужна служба специальных возможностей.");
         LinearLayout video = card("YouTube и Shorts"); toggle(video, "Блокировать YouTube Shorts", "shorts", true); toggle(video, "Блокировать YouTube целиком", "youtube_all", false);
-        toggle(video, "YouTube: один сеанс на 30 минут в день", "youtube_daily", true);
-        paragraph(video, "Лимит общий для официального приложения и сайта YouTube. Сеанс запускает только кнопка подтверждения; выход не ставит таймер на паузу. Если до полуночи меньше 30 минут, сеанс короче. После перезагрузки начатый сеанс текущего дня считается использованным. Полный запрет YouTube и Shorts сильнее дневного разрешения.");
-        paragraph(video, "Shorts определяются по экрану проигрывателя и адресу /shorts в браузере. После обновлений YouTube распознавание может потребовать доработки.");
+        toggle(video, "Полностью блокировать YouTube в браузере", "youtube_web", true);
+        toggle(video, "YouTube: лимит 30 минут в день", "youtube_daily", true);
+        paragraph(video, "С 00:00 до 08:00 YouTube закрыт. При разрешённом веб-доступе дневной лимит общий для приложения и сайта. Полный запрет и Shorts действуют независимо от лимита.");
         toggle(video, "Закрывать YouTube при скрытом пути", "shorts_hidden_url", true);
-        paragraph(video, "Строгий режим включён по умолчанию и действует при включённой блокировке Shorts. Если браузер или вкладка внутри приложения показывает только youtube.com или m.youtube.com без пути страницы, Фокус закрывает её целиком. Это может затронуть обычные видео и главную YouTube. При доступном полном пути обычные видео остаются разрешены. Если адрес вообще недоступен, этот режим не гарантирует блокировку.");
-        LinearLayout schedule = card("ВК и Telegram"); toggle(schedule, "Ограничивать по расписанию", "schedule", true);
-        paragraph(schedule, "Перед каждым новым сеансом нужно подтверждение; возврат в уже начатый сеанс его не требует. Формат времени ЧЧ:ММ. Одинаковые начало и конец — круглосуточно. Поддерживается расписание через полночь.");
-        EditText start = field(schedule, clock(store.number("start", 420)), "Начало"), end = field(schedule, clock(store.number("end", 1140)), "Конец"), duration = field(schedule, "" + store.number("minutes", 10), "Минут за сеанс");
-        duration.setInputType(InputType.TYPE_CLASS_NUMBER);
-        button(schedule, "Сохранить расписание", () -> {
+        paragraph(video, "Если браузер показывает только домен YouTube без пути страницы, строгий режим Shorts закрывает и обычные видео. Для веб-правил службе нужно видеть домен.");
+        LinearLayout schedule = card("ВК и Telegram");
+        toggle(schedule, "Применять лимиты ВК и Telegram", "schedule", true);
+        paragraph(schedule, "ВК: 5 минут в день, строго с 10:00 до 20:00. Telegram: 10 минут в каждом календарном часу, круглосуточно. Новый сеанс требует подтверждения и выбора длительности.");
+        LinearLayout morning = card("Утренний режим");
+        toggle(morning, "Утренняя пауза для Telegram, ВК и YouTube", "morning_enabled", true);
+        paragraph(morning, "Отсчёт начинается с первой разблокировки телефона после указанного времени. Ожидание не расходует лимит приложений.");
+        EditText morningStart = field(morning, clock(store.number("morning_start", 360)), "Время в формате ЧЧ:ММ");
+        EditText morningMinutes = field(morning, Integer.toString(store.number("morning_minutes", 30)), "Минут ожидания");
+        morningMinutes.setInputType(InputType.TYPE_CLASS_NUMBER);
+        button(morning, "Сохранить утренний режим", () -> {
             if (!editable()) return;
             try {
-                int from = parseTime(start.getText().toString()), to = parseTime(end.getText().toString()), minutes = Integer.parseInt(duration.getText().toString());
-                if (minutes < 1 || minutes > 60) throw new IllegalArgumentException("Длительность — от 1 до 60 минут");
-                store.prefs.edit().putInt("start", from).putInt("end", to).putInt("minutes", minutes).apply(); toast("Расписание сохранено");
-            } catch (IllegalArgumentException e) { toast(e.getMessage() == null ? "Проверь значения" : e.getMessage()); }
+                int start = parseTime(morningStart.getText().toString());
+                int minutes = Integer.parseInt(morningMinutes.getText().toString().trim());
+                if (minutes < 1 || minutes > 120) throw new IllegalArgumentException("Укажи от 1 до 120 минут");
+                store.prefs.edit().putInt("morning_start", start).putInt("morning_minutes", minutes).apply();
+                toast("Утренний режим сохранён");
+            } catch (IllegalArgumentException e) { toast("Проверь время в формате ЧЧ:ММ и длительность от 1 до 120 минут"); }
         });
-        LinearLayout weekly = card("LANGAME · суббота");
-        toggle(weekly, "Один сеанс на 10 минут в субботу", "langame_weekly", true);
-        paragraph(weekly, "В остальные дни LANGAME закрыт. Неиспользованные сеансы не переносятся. Выход не останавливает таймер; в полночь доступ заканчивается. После перезагрузки начатый сеанс считается использованным. Дни считаются по времени телефона. Настройка независима от расписания ВК и Telegram.");
-        paragraph(weekly, "Приложение: «LANGAME. Компьютерные клубы». Недельное правило действует при включённой проверке экрана. Автоматический карантин и категория игры не перекрывают субботний сеанс; ручное «Всегда блокировать» запрещает доступ полностью, а «Всегда разрешать» не отменяет недельный лимит.");
+        LinearLayout weekly = card("LANGAME · понедельник — четверг");
+        toggle(weekly, "Один непрерывный сеанс на 10 минут в неделю", "langame_weekly", true);
+        paragraph(weekly, "Пятница, суббота и воскресенье закрыты. Выход не останавливает таймер. После перезагрузки начатый сеанс считается использованным. Ручной запрет сильнее недельного разрешения.");
         LinearLayout domains = card("Запрещённые домены");
         paragraph(domains, "Одна маска на строку. example.com — точный домен; *.example.com — поддомены. Для любого окончания используй site.* и *.site.*: заменяй site своим именем. Первая строка блокирует site.ru, site.com, site.co.uk и другие зоны; вторая — www.site.ru и другие поддомены. *word* ищет фрагмент в любом месте домена; ? — один символ. # — комментарий.");
         EditText patterns = field(domains, store.text("rules", Store.DEFAULT_RULES), "Домен или маска");
@@ -247,7 +245,7 @@ public final class MainActivity extends Activity {
         for (AppCatalog.App app : AppCatalog.launchable(this)) {
             LinearLayout item = card(app.label());
             String reason = AppCatalog.reason(this, store, app.pkg());
-            String access = reason == null ? (AppCatalog.isLangame(app.pkg()) && store.bool("langame_weekly", true) ? "По расписанию: суббота, 10 минут за неделю" : "Разрешено") : reason;
+            String access = reason == null ? (AppCatalog.isLangame(app.pkg()) && store.bool("langame_weekly", true) ? "По расписанию: пн–чт, 10 минут за неделю" : "Разрешено") : reason;
             paragraph(item, (app.game() ? "Игра · " : "") + (app.system() ? "Системное · " : "") + access + "\n" + app.pkg());
             if (AppCatalog.critical(this, app.pkg())) { paragraph(item, "Необходимая функция телефона — исключена из блокировок"); continue; }
             button(item, "Изменить правило", () -> {
@@ -264,26 +262,24 @@ public final class MainActivity extends Activity {
     private void protection() {
         title("Держать слово", "Защита от импульсивного изменения правил. Сначала проверь блокировки на своём телефоне.");
         LinearLayout lock = card(store.locked() ? "Настройки защищены" : "Зафиксировать правила");
-        paragraph(lock, "После фиксации менять правила и отключать защиту в Фокусе нельзя. Обычная разблокировка — через 24 часа после запроса. Время считается при включённом телефоне; после перезагрузки ожидание начинается заново. Код восстановления снимает ожидание сразу.");
+        paragraph(lock, "После фиксации для изменения правил и отключения защиты в Фокусе нужен код восстановления.");
         if (store.locked()) {
-            if (store.unlockRequested()) paragraph(lock, "Ожидание: примерно " + ((store.unlockRemaining() + 3_599_999L) / 3_600_000L) + " ч.");
-            button(lock, "Запросить разблокировку через 24 часа", () -> { store.requestUnlock(); render(); });
             button(lock, "Восстановить по коду", this::recover);
         } else {
             button(lock, Recovery.exists(store) ? "Задать новый код восстановления" : "Создать код восстановления", this::createRecovery);
             button(lock, "Зафиксировать текущие правила", () -> {
                 if (!Recovery.exists(store)) { toast("Сначала создай и сохрани код восстановления"); return; }
-                new AlertDialog.Builder(this).setTitle("Зафиксировать правила?").setMessage("Сохрани код у доверенного человека или в недоступном месте. Без него изменение настроек потребует 24 часа ожидания после запроса.")
+                new AlertDialog.Builder(this).setTitle("Зафиксировать правила?").setMessage("Сохрани код у доверенного человека. После фиксации снять защиту в Фокусе можно только этим кодом.")
                     .setNegativeButton("Отмена", null).setPositiveButton("Зафиксировать", (d,w) -> { store.lock(); render(); }).show();
             });
         }
         LinearLayout guard = card("Защита от удаления");
         toggle(guard, "Перекрывать попытки удаления при фиксации", "uninstall_guard", false);
-        paragraph(guard, "Работает через включённую проверку экрана, когда правила зафиксированы. Перекрывает подтверждение удаления Фокуса и его страницу «О приложении» с кнопкой удаления: так защита срабатывает раньше. Распознанное подтверждение сразу закрывается. Другие приложения и их настройки доступны.");
-        paragraph(guard, "Чтобы менять разрешения или удалить Фокус, сначала открой Фокус и сними фиксацию по коду либо запроси разблокировку через 24 часа. Защита зависит от доставки событий Android: полностью исключить быстрое нажатие и системные способы обхода нельзя.");
+        paragraph(guard, "Работает через включённую проверку экрана, когда правила зафиксированы. Перекрывает страницу «О приложении» и страницу специальных возможностей Фокуса. Закрывает подтверждение удаления Фокуса и системные подтверждения принудительной остановки приложений.");
+        paragraph(guard, "Чтобы менять разрешения или удалить Фокус, сначала открой Фокус и сними фиксацию по коду восстановления. Защита зависит от доставки событий Android: полностью исключить быстрое нажатие и системные способы обхода нельзя.");
         LinearLayout privacy = card("Данные и безопасность");
         paragraph(privacy, "Фокус хранит правила и начало сеансов на устройстве. Сообщения, история посещений и снимки экрана не сохраняются и не отправляются. DNS-запросы при включённом DNS-фильтре уходят выбранному Cloudflare-резолверу по обычному UDP DNS. Проверка адресной строки и Shorts выполняется локально.");
-        paragraph(privacy, "Это первая версия для личного использования. Режим специальных возможностей можно отключить через Android; запрет удаления сам по себе не запрещает это. При включённой защите удаления и зафиксированных правилах перекрываются распознанные подтверждения удаления и собственная страница «О приложении» с кнопкой удаления. Для её открытия сначала сними фиксацию в Фокусе. Остальные настройки, экраны предоставления разрешений и экстренные вызовы доступны. Сброс устройства, безопасный режим и доступ к инструментам разработчика остаются путями обхода.");
+        paragraph(privacy, "Экранная защита действует, пока включена служба Фокуса. Чтобы открыть защищённые страницы Фокуса в Android, сними фиксацию по коду восстановления.");
     }
     private void createRecovery() {
         if (!editable()) return;

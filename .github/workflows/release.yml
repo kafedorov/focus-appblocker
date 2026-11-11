@@ -46,11 +46,30 @@ jobs:
           export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:?Android SDK is missing}}"
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_USER_HOME=$HOME/.android" >> "$GITHUB_ENV"
+          build_tools="$ANDROID_HOME/build-tools/35.0.0"
+          if [[ -f "$ANDROID_HOME/platforms/android-36/android.jar" && -x "$build_tools/aapt2" && -f "$build_tools/lib/apksigner.jar" ]]; then
+            echo "Android SDK 36 and Build Tools 35.0.0 are already installed."
+            exit 0
+          fi
+
+          # The runner can have sdkmanager installed without putting it on PATH.
+          sdkmanager=""
+          for candidate in "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager; do
+            if [[ -x "$candidate" ]]; then
+              sdkmanager="$candidate"
+              break
+            fi
+          done
+          if [[ -z "$sdkmanager" ]]; then
+            echo "::error::sdkmanager was not found under $ANDROID_HOME/cmdline-tools."
+            exit 1
+          fi
+
           # Only sdkmanager's status matters here; 'yes' normally exits on SIGPIPE.
           set +o pipefail
-          yes | sdkmanager --sdk_root="$ANDROID_HOME" --licenses > /dev/null
+          yes | "$sdkmanager" --sdk_root="$ANDROID_HOME" --licenses > /dev/null
           set -o pipefail
-          sdkmanager --sdk_root="$ANDROID_HOME" "platforms;android-36" "build-tools;35.0.0"
+          "$sdkmanager" --sdk_root="$ANDROID_HOME" "platforms;android-36" "build-tools;35.0.0"
 
       - name: Restore and check the existing signing key
         env:

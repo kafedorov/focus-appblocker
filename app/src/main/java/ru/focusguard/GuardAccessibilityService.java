@@ -46,6 +46,8 @@ import ru.focusguard.core.BudgetPolicy;
 import ru.focusguard.core.BrowserAddress;
 import ru.focusguard.core.BrowserPage;
 import ru.focusguard.core.SessionGate;
+import ru.focusguard.core.SteamPolicy;
+import ru.focusguard.core.TimeSettingsGuard;
 import ru.focusguard.core.UninstallGuard;
 
 public final class GuardAccessibilityService extends AccessibilityService {
@@ -67,20 +69,23 @@ public final class GuardAccessibilityService extends AccessibilityService {
     private static final String YOUTUBE = "com.google.android.youtube";
     private static final String SHORTS_BLOCK = "YouTube Shorts отключены.";
     private static final String REMOVAL_BLOCK = "Системные настройки Фокуса защищены. Для доступа открой Фокус и сними фиксацию по коду восстановления.";
+    private static final String TIME_BLOCK = "Изменение даты, времени и часового пояса защищено. Для доступа открой Фокус и сними фиксацию по коду восстановления.";
+    private int dismissedTimeWindow = -1;
     private static final long REMOVAL_CHECK_INTERVAL_MS = 1000;
     private int dismissedSettingsDialogWindow = -1;
+    private int dismissedStorageWindow = -1;
     private long settingsOverlayUntil;
     private final Runnable checkSettingsTransition = this::inspect;
     private final SharedPreferences.OnSharedPreferenceChangeListener removalSettingsChanged = (prefs, key) -> {
-        if ("locked".equals(key) || "uninstall_guard".equals(key) || "enabled".equals(key)) {
+        if ("locked".equals(key) || "uninstall_guard".equals(key) || TimeSettingsGuard.SETTING.equals(key) || "enabled".equals(key)) {
             removalSettingsUpdated();
         }
     };
     private final Runnable removalCheck = new Runnable() {
         @Override public void run() {
-            if (!connected || !removalProtectionEnabled()) return;
+            if (!connected || !settingsProtectionEnabled()) return;
             AccessibilityNodeInfo root = applicationRoot();
-            if (!inspectRemoval(root) && root != null && REMOVAL_BLOCK.equals(overlayReason)) inspect();
+            if (!inspectSystemSettings(root, false) && root != null && settingsOverlay()) inspect();
             handler.postDelayed(this, REMOVAL_CHECK_INTERVAL_MS);
         }
     };
@@ -118,7 +123,7 @@ public final class GuardAccessibilityService extends AccessibilityService {
     private final Runnable check = () -> { checkPending = false; inspect(); };
     private final Runnable urgentRetry = () -> {
         urgentRetriesPending--;
-        if (store != null && removalProtectionEnabled()) inspectRemoval(applicationRoot());
+        if (store != null && settingsProtectionEnabled()) inspectSystemSettings(applicationRoot(), false);
     };
     private static final Set<String> BROWSERS = new java.util.HashSet<>(java.util.Arrays.asList("com.android.chrome", "com.chrome.beta", "com.chrome.dev", "com.sec.android.app.sbrowser",
         "com.sec.android.app.sbrowser.beta", "org.mozilla.firefox", "org.mozilla.fenix", "org.mozilla.focus", "com.microsoft.emmx",
@@ -158,11 +163,14 @@ public final class GuardAccessibilityService extends AccessibilityService {
         boolean windowChanged = type == AccessibilityEvent.TYPE_WINDOWS_CHANGED || type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED;
         boolean systemEvent = UninstallGuard.systemPackage(pkg);
         if ((systemEvent || type == AccessibilityEvent.TYPE_WINDOWS_CHANGED || windowChanged && pkg.isEmpty())
-            && removalProtectionEnabled()) {
+            && settingsProtectionEnabled()) {
             boolean settingsDialog = UninstallGuard.settingsPackage(pkg) && type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
-                && protectSettingsDialog(event);
-            boolean settingsInteraction = settingsDialog || UninstallGuard.settingsPackage(pkg)
-                && type == AccessibilityEvent.TYPE_VIEW_CLICKED && protectSettingsClick(event);
+                && removalProtectionEnabled() && protectSettingsDialog(event);
+            boolean timeInteraction = timeProtectionEnabled() && UninstallGuard.settingsPackage(pkg)
+                && (windowChanged && protectTimeEvent(event)
+                    || type == AccessibilityEvent.TYPE_VIEW_CLICKED && protectTimeClick(event));
+            boolean settingsInteraction = settingsDialog || timeInteraction || UninstallGuard.settingsPackage(pkg)
+                && type == AccessibilityEvent.TYPE_VIEW_CLICKED && removalProtectionEnabled() && protectSettingsClick(event);
             if ((windowChanged || settingsInteraction) && urgentRetriesPending == 0) {
                 urgentRetriesPending = 2;
                 handler.postDelayed(urgentRetry, 24);
@@ -173,7 +181,7 @@ public final class GuardAccessibilityService extends AccessibilityService {
                 && inspectRemovalEventWindow(event.getWindowId())) return;
             boolean settingsDialogEvent = windowChanged && UninstallGuard.settingsPackage(pkg)
                 && isDialogClass(event.getClassName());
-            if (inspectRemoval(active, settingsDialog || settingsDialogEvent)) return;
+            if (inspectSystemSettings(active, settingsDialog || settingsDialogEvent)) return;
         }
         if (windowChanged) {
             handler.removeCallbacks(check);
@@ -236,7 +244,7 @@ public final class GuardAccessibilityService extends AccessibilityService {
         handler.removeCallbacks(deadlineCheck);
         if (!UninstallGuard.settingsPackage(pkg)) clearSettingsTransition();
         if (pkg.equals(getPackageName())) { hide(); return; }
-        if (UninstallGuard.systemPackage(pkg) && removalProtectionEnabled() && inspectRemoval(root)) return;
+        if (UninstallGuard.systemPackage(pkg) && settingsProtectionEnabled() && inspectSystemSettings(root, false)) return;
         long settling = shortsExitUntil - SystemClock.elapsedRealtime();
         if (YOUTUBE.equals(pkg) && settling > 0) {
             handler.postDelayed(deadlineCheck, settling);
@@ -263,6 +271,11 @@ public final class GuardAccessibilityService extends AccessibilityService {
     private Decision assess(AccessibilityNodeInfo root, BrowserPage page) {
         String pkg = root.getPackageName().toString();
         String reason = AppCatalog.reason(this, store, pkg);
+        SteamPolicy.Result steam = SteamPolicy.evaluate(pkg, store.bool(SteamPolicy.SETTING, true), LocalDateTime.now());
+        if (reason == null && steam != null) {
+            return new Decision(steam.blocked() ? "Steam закрыт с пятницы по воскресенье. Доступ " + nextWindow(steam.nextChange()) + "." : null,
+                null, false, until(steam.nextChange()));
+        }
         boolean browserPage = reason == null && page != null;
         String group = AppCatalog.group(pkg);
         String sessionKey = AppCatalog.isLangame(pkg) && store.bool("langame_weekly", true) ? "langame" : null;
@@ -612,24 +625,80 @@ public final class GuardAccessibilityService extends AccessibilityService {
     private String shortId(String id) { return id == null ? "" : id.substring(id.lastIndexOf('/') + 1).toLowerCase(Locale.ROOT); }
     private void removalSettingsUpdated() {
         refreshRemovalChecks();
-        if (!removalProtectionEnabled()) {
+        if (!settingsProtectionEnabled()) {
             clearSettingsTransition();
-            if (REMOVAL_BLOCK.equals(overlayReason)) inspect();
+            if (settingsOverlay()) inspect();
         }
     }
     private void refreshRemovalChecks() {
         handler.removeCallbacks(removalCheck);
-        if (connected && removalProtectionEnabled()) handler.post(removalCheck);
+        if (connected && settingsProtectionEnabled()) handler.post(removalCheck);
     }
     private boolean inspectRemovalEventWindow(int windowId) {
         if (windowId < 0) return false;
         for (AccessibilityWindowInfo window : getWindows()) {
             if (window.getId() == windowId && window.getType() == AccessibilityWindowInfo.TYPE_APPLICATION
                 && (window.isActive() || window.isFocused())) {
-                return inspectRemoval(window.getRoot());
+                return inspectSystemSettings(window.getRoot(), false);
             }
         }
         return false;
+    }
+    private boolean settingsProtectionEnabled() { return removalProtectionEnabled() || timeProtectionEnabled(); }
+    private boolean settingsOverlay() { return REMOVAL_BLOCK.equals(overlayReason) || TIME_BLOCK.equals(overlayReason); }
+    private boolean timeProtectionEnabled() {
+        return store.bool("enabled", true) && store.bool(TimeSettingsGuard.SETTING, true) && store.locked()
+            && getSystemService(PowerManager.class).isInteractive() && !getSystemService(KeyguardManager.class).isKeyguardLocked();
+    }
+    private boolean inspectSystemSettings(AccessibilityNodeInfo root, boolean dialog) {
+        // Preserve the established removal path and its priority before scanning time settings.
+        if (removalProtectionEnabled() && inspectRemoval(root, dialog)) return true;
+        if (!timeProtectionEnabled() || root == null || root.getPackageName() == null
+            || !UninstallGuard.settingsPackage(root.getPackageName().toString())) return false;
+        TimeSettingsGuard.Scan scan = new TimeSettingsGuard.Scan(root.getPackageName().toString());
+        scan.windowClass(root.getClassName());
+        for (AccessibilityNodeInfo node : nodes(root)) {
+            if (!node.isVisibleToUser() || node.isPassword() || node.isEditable()) continue;
+            String id = shortId(node.getViewIdResourceName());
+            scan.windowClass(node.getClassName());
+            scan.resource(id);
+            if (Build.VERSION.SDK_INT >= 28) {
+                scan.heading(node.getPaneTitle());
+                if (node.isHeading()) scan.heading(node.getText());
+            }
+            if (id.equals("action_bar_title") || id.equals("collapsing_toolbar_title")) scan.heading(node.getText());
+            scan.add(node.getText()); scan.add(node.getContentDescription());
+            if (scan.blocks()) { closeTimeWindow(root.getWindowId()); return true; }
+        }
+        dismissedTimeWindow = -1;
+        return TIME_BLOCK.equals(overlayReason) && SystemClock.elapsedRealtime() < settingsOverlayUntil;
+    }
+    private void closeTimeWindow(int windowId) {
+        if (windowId >= 0 && windowId != dismissedTimeWindow && backFromActiveDialog(windowId, true)) dismissedTimeWindow = windowId;
+        show("com.android.settings", TIME_BLOCK, false);
+    }
+    private boolean protectTimeEvent(AccessibilityEvent event) {
+        TimeSettingsGuard.Scan scan = new TimeSettingsGuard.Scan("com.android.settings");
+        scan.windowClass(event.getClassName());
+        if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            for (CharSequence label : event.getText()) scan.heading(label);
+        }
+        for (CharSequence label : event.getText()) scan.add(label);
+        if (!scan.blocks()) return false;
+        closeTimeWindow(event.getWindowId());
+        protectTimeTransition();
+        return true;
+    }
+    private boolean protectTimeClick(AccessibilityEvent event) {
+        if (!eventLabel(event, TimeSettingsGuard::entry)) return false;
+        protectTimeTransition();
+        return true;
+    }
+    private void protectTimeTransition() {
+        settingsOverlayUntil = SystemClock.elapsedRealtime() + 400;
+        show("com.android.settings", TIME_BLOCK, false);
+        handler.removeCallbacks(checkSettingsTransition);
+        handler.postDelayed(checkSettingsTransition, 400);
     }
     private boolean removalProtectionEnabled() {
         return store.bool("enabled", true) && store.bool("uninstall_guard", false) && store.locked()
@@ -676,6 +745,8 @@ public final class GuardAccessibilityService extends AccessibilityService {
     private void clearSettingsTransition() {
         settingsOverlayUntil = 0;
         dismissedSettingsDialogWindow = -1;
+        dismissedStorageWindow = -1;
+        dismissedTimeWindow = -1;
     }
     private record RemovalWindow(UninstallGuard.Scan scan, AccessibilityNodeInfo cancel) {}
     private boolean inspectRemoval(AccessibilityNodeInfo root) { return inspectRemoval(root, false); }
@@ -687,11 +758,15 @@ public final class GuardAccessibilityService extends AccessibilityService {
         RemovalWindow current = readRemovalWindow(root, pkg, settingsDialogEvent);
         UninstallGuard.Scan scan = current.scan();
         UninstallGuard.Decision decision = scan.decision();
+        if (decision != UninstallGuard.Decision.STORAGE) dismissedStorageWindow = -1;
         if (decision == UninstallGuard.Decision.ALLOW) {
             dismissedSettingsDialogWindow = -1;
             return UninstallGuard.settingsPackage(pkg) && REMOVAL_BLOCK.equals(overlayReason) && now < settingsOverlayUntil;
         }
-        if (decision == UninstallGuard.Decision.APP_INFO || decision == UninstallGuard.Decision.ACCESSIBILITY) {
+        if (decision == UninstallGuard.Decision.STORAGE) {
+            int windowId = root.getWindowId();
+            if (windowId != dismissedStorageWindow && backFromActiveDialog(windowId, true)) dismissedStorageWindow = windowId;
+        } else if (decision == UninstallGuard.Decision.APP_INFO || decision == UninstallGuard.Decision.ACCESSIBILITY) {
             dismissedRemovalWindow = -1;
             dismissedSettingsDialogWindow = -1;
         } else if (decision == UninstallGuard.Decision.UNINSTALL) {
@@ -724,6 +799,7 @@ public final class GuardAccessibilityService extends AccessibilityService {
         UninstallGuard.Scan scan = new UninstallGuard.Scan(pkg);
         if (isDialogClass(root.getClassName())) scan.markDialogWindow();
         if (Build.VERSION.SDK_INT >= 28 && root.getPaneTitle() != null) {
+            scan.markPageTitle(root.getPaneTitle());
             scan.add(new UninstallGuard.Label(root.getPaneTitle().toString(), false));
         }
         AccessibilityNodeInfo cancel = null;
@@ -739,11 +815,14 @@ public final class GuardAccessibilityService extends AccessibilityService {
                     || id.equals("button3") || (clazz != null && clazz.toString().endsWith("Button")));
                 if (clazz != null && (clazz.toString().endsWith("Switch") || clazz.toString().endsWith("SwitchCompat"))
                     || node.isCheckable() && (id.equals("switch_widget") || id.equals("switch_bar"))) scan.markSwitch();
+                if (id.equals("action_bar_title") || id.equals("collapsing_toolbar_title")
+                    || Build.VERSION.SDK_INT >= 28 && node.isHeading()) scan.markPageTitle(node.getText());
                 if (node.getText() != null) scan.add(new UninstallGuard.Label(node.getText().toString(), action));
                 if (node.getContentDescription() != null) scan.add(new UninstallGuard.Label(node.getContentDescription().toString(), action));
                 if (action && (UninstallGuard.cancelControl(node.getText()) || UninstallGuard.cancelControl(node.getContentDescription()))) cancel = node;
                 UninstallGuard.Decision decision = scan.decision();
-                if (decision == UninstallGuard.Decision.APP_INFO && !waitForDialog) return new RemovalWindow(scan, null);
+                if (decision == UninstallGuard.Decision.STORAGE
+                    || decision == UninstallGuard.Decision.APP_INFO && !waitForDialog) return new RemovalWindow(scan, null);
                 if (cancel != null && (decision == UninstallGuard.Decision.FORCE_STOP || decision == UninstallGuard.Decision.UNINSTALL
                     || decision == UninstallGuard.Decision.DISABLE_ACCESSIBILITY))
                     return new RemovalWindow(scan, cancel);
@@ -755,7 +834,10 @@ public final class GuardAccessibilityService extends AccessibilityService {
         }
         if (scan.decision() == UninstallGuard.Decision.ALLOW && !scan.isForceStopDialog()) {
             AccessibilityWindowInfo window = root.getWindow();
-            if (window != null && window.getTitle() != null) scan.add(new UninstallGuard.Label(window.getTitle().toString(), false));
+            if (window != null && window.getTitle() != null) {
+                scan.markPageTitle(window.getTitle());
+                scan.add(new UninstallGuard.Label(window.getTitle().toString(), false));
+            }
         }
         return new RemovalWindow(scan, cancel);
     }

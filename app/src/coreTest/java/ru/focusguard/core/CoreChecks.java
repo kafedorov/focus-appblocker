@@ -87,6 +87,8 @@ public final class CoreChecks {
         check(SessionPolicy.evaluate(1320, 360, 10, time("12:00"), 1000, 1, null, true).status() == SessionPolicy.Status.OUTSIDE, "overnight window daytime");
         check(SessionPolicy.evaluate(0, 0, 10, time("12:00"), 1000, 1, null, true).status() == SessionPolicy.Status.ACTIVE, "all day window");
         weeklyChecks();
+        steamChecks();
+        timeSettingsChecks();
         uninstallGuardChecks();
         count += SessionAndBrowserChecks.run();
         byte[] query = dns("example.com"); byte[] ip = packet(query);
@@ -182,6 +184,21 @@ public final class CoreChecks {
         var samsungStop = new UninstallGuard.Scan("com.android.settings");
         samsungStop.add(ui("Принудительная остановка приложения может\nпривести к ошибкам.", true));
         check(samsungStop.decision() == UninstallGuard.Decision.FORCE_STOP, "Samsung stop message may be exposed on an actionable container");
+        var storage = java.util.List.of(ui("Хранилище", false), ui("Фокус", false), ui("Версия 0.1.12", false),
+            ui("Использовано места", false), ui("Приложение", false), ui("Данные", false), ui("Кэш", false), ui("Всего", false));
+        check(UninstallGuard.evaluate("com.android.settings", storage) == UninstallGuard.Decision.STORAGE,
+            "Samsung Focus storage works without clear-data or clear-cache controls");
+        var titledStorage = new UninstallGuard.Scan("com.android.settings");
+        titledStorage.markPageTitle("Storage & cache");
+        titledStorage.add(ui("Фокус", false));
+        check(titledStorage.decision() == UninstallGuard.Decision.ALLOW, "device storage listing a Focus entry is not the Focus page");
+        titledStorage.add(ui("Версия 0.1.12", false));
+        check(titledStorage.decision() == UninstallGuard.Decision.STORAGE, "native storage heading and app version identify the page before rows load");
+        check(UninstallGuard.evaluate("com.android.settings", java.util.List.of(ui("Хранилище", true), ui("Фокус", false)))
+            == UninstallGuard.Decision.ALLOW, "a storage row alone is not the storage page");
+        check(UninstallGuard.evaluate("com.android.settings", java.util.List.of(ui("Хранилище", false), ui("LANGAME", false),
+            ui("Данные", false), ui("Кэш", false), ui("Всего", false))) == UninstallGuard.Decision.ALLOW, "other app storage stays accessible");
+        check(UninstallGuard.evaluate("com.android.chrome", storage) == UninstallGuard.Decision.ALLOW, "website cannot imitate Settings storage");
         var untitledCard = java.util.List.of(ui("Фокус", false), ui("Разрешения", false), ui("Использование данных", false), ui("Остановить", true));
         check(UninstallGuard.evaluate("com.android.settings", untitledCard) == UninstallGuard.Decision.APP_INFO, "untitled Focus card with force stop is protected");
         check(UninstallGuard.evaluate("com.android.settings", untitledCard.subList(0, 3)) == UninstallGuard.Decision.ALLOW, "general Settings with incomplete evidence stays accessible");
@@ -210,6 +227,64 @@ public final class CoreChecks {
         check(incremental.decision() == UninstallGuard.Decision.UNINSTALL, "confirmation takes priority over background app-info");
         for (var labels : java.util.Arrays.asList(target, java.util.Arrays.asList(ui("Удалить", true), ui("Хотите удалить это приложение?", false), ui("Фокус", false))))
             check(UninstallGuard.evaluate("com.android.packageinstaller", labels) == UninstallGuard.Decision.UNINSTALL, "node order independent");
+    }
+    private static void timeSettingsChecks() {
+        var general = new TimeSettingsGuard.Scan("com.android.settings");
+        general.heading("Общие настройки");
+        for (String label : new String[]{"Язык", "Языки приложений", "Дата и время", "Сброс"}) general.add(label);
+        check(!general.blocks(), "Samsung general settings stay accessible");
+        var automatic = new TimeSettingsGuard.Scan("com.android.settings");
+        for (String label : new String[]{"Дата и время", "Автоопределение времени", "Автоматический часовой пояс", "24-часовой формат"}) automatic.add(label);
+        check(automatic.blocks(), "Samsung automatic time screenshot blocks without native title");
+        var manual = new TimeSettingsGuard.Scan("com.android.settings");
+        manual.add("Установить дату"); manual.add("Установить время");
+        check(manual.blocks(), "Samsung manual date and time screenshot blocks");
+        var heading = new TimeSettingsGuard.Scan("com.android.settings");
+        heading.heading("Дата и время");
+        check(heading.blocks(), "time heading blocks before switches load");
+        var english = new TimeSettingsGuard.Scan("com.android.settings");
+        english.heading("Date & time");
+        check(english.blocks(), "English time screen");
+        for (String clazz : new String[]{"android.app.DatePickerDialog", "android.app.TimePickerDialog", "com.android.settings.Settings$DateTimeSettingsActivity", "com.android.settings.datetime.timezone.TimeZoneSettings"}) {
+            var picker = new TimeSettingsGuard.Scan("com.android.settings"); picker.windowClass(clazz);
+            check(picker.blocks(), "native time activity or picker: " + clazz);
+        }
+        var generic = new TimeSettingsGuard.Scan("com.android.settings"); generic.windowClass("android.app.AlertDialog");
+        check(!generic.blocks(), "unrelated Settings dialogs allowed");
+        generic.resource("datePicker");
+        check(!generic.blocks(), "resource ids are passed normalized");
+        generic.resource("datepicker");
+        check(generic.blocks(), "anonymous date dialog recognized by native widget");
+        for (String pkg : new String[]{"com.android.chrome", "com.sec.android.app.clockpackage", "ru.focusguard"}) {
+            var other = new TimeSettingsGuard.Scan(pkg); other.heading("Дата и время"); other.windowClass("android.app.TimePickerDialog");
+            check(!other.blocks(), "time guard excludes browser, alarm clock and recovery UI: " + pkg);
+        }
+        var zone = new TimeSettingsGuard.Scan("com.android.settings"); zone.heading("Часовой пояс");
+        check(zone.blocks(), "manual time zone screen protected");
+        check(TimeSettingsGuard.entry("Дата и время") && TimeSettingsGuard.entry("Автоопределение времени"), "click interception recognizes Samsung entries");
+        check(!TimeSettingsGuard.entry("Общие настройки") && !TimeSettingsGuard.entry("Будильник"), "general settings and alarm entry not blocked");
+        check(TimeSettingsGuard.automaticReady(1, 1), "lock accepts automatic clock and zone");
+        check(!TimeSettingsGuard.automaticReady(0, 1) && !TimeSettingsGuard.automaticReady(1, 0)
+            && !TimeSettingsGuard.automaticReady(0, 0), "lock requires both automatic switches");
+    }
+    private static void steamChecks() {
+        for (int day = 0; day < 7; day++) {
+            LocalDateTime now = LocalDateTime.parse("2026-11-09T12:00").plusDays(day);
+            var result = SteamPolicy.evaluate(SteamPolicy.PACKAGE, true, now);
+            check(result.blocked() == (day >= 4), "Steam weekday " + now.getDayOfWeek());
+            check(result.nextChange().equals(LocalDateTime.parse(day >= 4 ? "2026-11-16T00:00" : "2026-11-13T00:00")),
+                "Steam deadline tracks the next change, not the next poll");
+        }
+        check(!SteamPolicy.evaluate(SteamPolicy.PACKAGE, true, LocalDateTime.parse("2026-11-12T23:59:59")).blocked(), "Steam Thursday last second allowed");
+        check(SteamPolicy.evaluate(SteamPolicy.PACKAGE, true, LocalDateTime.parse("2026-11-13T00:00")).blocked(), "Steam exact Friday boundary blocked");
+        check(SteamPolicy.evaluate(SteamPolicy.PACKAGE, true, LocalDateTime.parse("2026-11-15T23:59:59")).blocked(), "Steam Sunday last second blocked");
+        check(!SteamPolicy.evaluate(SteamPolicy.PACKAGE, true, LocalDateTime.parse("2026-11-16T00:00")).blocked(), "Steam exact Monday boundary allowed");
+        LocalDateTime sunday = LocalDateTime.parse("2026-11-15T12:00");
+        check(SteamPolicy.evaluate(SteamPolicy.PACKAGE, false, sunday) == null, "Steam schedule can be disabled by editable settings");
+        check(SteamPolicy.evaluate("com.f5computers.langame_aggregator", true, sunday) == null, "Steam rule does not change LANGAME policy");
+        check(SteamPolicy.evaluate(SteamPolicy.PACKAGE + ".other", true, sunday) == null, "Steam rule uses exact package");
+        check(SteamPolicy.evaluate(SteamPolicy.PACKAGE, true, LocalDateTime.parse("2027-01-01T12:00")).nextChange()
+            .equals(LocalDateTime.parse("2027-01-04T00:00")), "Steam schedule across year boundary");
     }
     private static void weeklyChecks() {
         for (String date : new String[]{"2026-10-30", "2026-10-31", "2026-11-01"}) {

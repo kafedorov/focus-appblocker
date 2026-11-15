@@ -32,12 +32,14 @@ import java.util.Locale;
 import java.util.Set;
 import ru.focusguard.core.DomainRules;
 import ru.focusguard.core.SessionGate;
+import ru.focusguard.core.SteamPolicy;
+import ru.focusguard.core.TimeSettingsGuard;
 
 public final class MainActivity extends Activity {
     private static final int INK = Color.rgb(24, 48, 40), GREEN = Color.rgb(25, 117, 101), MUTED = Color.rgb(95, 112, 103);
     private Store store;
     private LinearLayout page, outer;
-    private TextView health, telegramState, vkState, langameState, youtubeState;
+    private TextView health, telegramState, vkState, langameState, youtubeState, steamState;
     private int tab;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable refresh = new Runnable() { @Override public void run() { refreshStatus(); handler.postDelayed(this, 1000); } };
@@ -53,7 +55,7 @@ public final class MainActivity extends Activity {
     @Override protected void onPause() { handler.removeCallbacks(refresh); super.onPause(); }
     private int dp(int value) { return (int)(value * getResources().getDisplayMetrics().density); }
     private void render() {
-        health = null; vkState = null; telegramState = null; langameState = null; youtubeState = null;
+        health = null; vkState = null; telegramState = null; langameState = null; youtubeState = null; steamState = null;
         outer = new LinearLayout(this); outer.setOrientation(LinearLayout.VERTICAL); outer.setBackgroundColor(Color.rgb(244,246,242));
         outer.setOnApplyWindowInsetsListener((view, insets) -> {
             if (Build.VERSION.SDK_INT >= 30) {
@@ -120,6 +122,9 @@ public final class MainActivity extends Activity {
         LinearLayout weekly = card("LANGAME · раз в неделю");
         langameState = label("", 16, INK); langameState.setPadding(0, dp(12), 0, dp(8)); weekly.addView(langameState);
         paragraph(weekly, "С понедельника по четверг доступен один непрерывный сеанс на 10 минут. Выход не останавливает таймер. С наступлением пятницы доступ закрывается.");
+        LinearLayout steam = card("Steam · пт–вс закрыт");
+        steamState = label("", 16, INK); steamState.setPadding(0, dp(12), 0, dp(8)); steam.addView(steamState);
+        paragraph(steam, "Приложение Steam закрыто с пятницы 00:00 до понедельника 00:00 по времени телефона. В понедельник–четверг дополнительного лимита нет.");
         LinearLayout vpn = card("Сайты и твой VPN");
         paragraph(vpn, "Маски доменов проверяются в адресной строке поддерживаемых браузеров даже при другом VPN. DNS-фильтр дополняет эту проверку, но занимает единственное VPN-подключение.");
         button(vpn, "Включить DNS-фильтр", this::prepareVpn);
@@ -145,12 +150,15 @@ public final class MainActivity extends Activity {
             if (!warning.isEmpty() && DnsVpnService.running) state += "\n" + warning;
             String cleanupError = store.text("legacy_cleanup_error", "");
             if (!cleanupError.isEmpty()) state += "\n" + cleanupError;
+            if (store.bool(TimeSettingsGuard.SETTING, true) && !store.automaticTimeEnabled())
+                state += "\nНужно включить автоопределение времени и часового пояса в Android. Если правила зафиксированы, сначала введи код восстановления.";
             health.setText(state);
         }
         if (vkState != null) vkState.setText("ВК · " + sessionText("vk"));
         if (telegramState != null) telegramState.setText("Telegram · " + sessionText("telegram"));
         if (langameState != null) langameState.setText(langameText());
         if (youtubeState != null) youtubeState.setText(youtubeText());
+        if (steamState != null) steamState.setText(steamText());
     }
     private String sessionText(String group) {
         if (!store.bool("enabled", true) || !store.bool("schedule", true)) return "лимит выключен";
@@ -172,6 +180,13 @@ public final class MainActivity extends Activity {
         String web = store.bool("youtube_web", true) ? "Веб-версия закрыта. " : "";
         if (!store.bool("youtube_daily", true)) return web + "Дневной лимит выключен. Ночной блок действует с 00:00 до 08:00.";
         return web + accessText(store.access("youtube"));
+    }
+    private String steamText() {
+        if (!store.bool("enabled", true)) return "Защита приостановлена";
+        SteamPolicy.Result steam = SteamPolicy.evaluate(SteamPolicy.PACKAGE, store.bool(SteamPolicy.SETTING, true), java.time.LocalDateTime.now());
+        if (steam == null) return "Ограничение по дням выключено";
+        if (store.set("blocked").contains(SteamPolicy.PACKAGE)) return "Действует ручной запрет";
+        return steam.blocked() ? "Доступ в понедельник в 00:00" : "Блокировка начнётся в пятницу в 00:00";
     }
     private String langameText() {
         if (!store.bool("enabled", true) || !store.bool("langame_weekly", true)) return "Недельное ограничение выключено";
@@ -211,6 +226,9 @@ public final class MainActivity extends Activity {
         LinearLayout weekly = card("LANGAME · понедельник — четверг");
         toggle(weekly, "Один непрерывный сеанс на 10 минут в неделю", "langame_weekly", true);
         paragraph(weekly, "Пятница, суббота и воскресенье закрыты. Выход не останавливает таймер. После перезагрузки начатый сеанс считается использованным. Ручной запрет сильнее недельного разрешения.");
+        LinearLayout steam = card("Steam · пятница — воскресенье");
+        toggle(steam, "Блокировать Steam с пятницы по воскресенье", SteamPolicy.SETTING, true);
+        paragraph(steam, "С пятницы 00:00 до понедельника 00:00 приложение закрыто. Правило включено по умолчанию, в том числе после обновления. «Всегда разрешать» не отменяет расписание. В понедельник–четверг действуют обычные ручные правила и карантин.");
         LinearLayout domains = card("Запрещённые домены");
         paragraph(domains, "Одна маска на строку. example.com — точный домен; *.example.com — поддомены. Для любого окончания используй site.* и *.site.*: заменяй site своим именем. Первая строка блокирует site.ru, site.com, site.co.uk и другие зоны; вторая — www.site.ru и другие поддомены. *word* ищет фрагмент в любом месте домена; ? — один символ. # — комментарий.");
         EditText patterns = field(domains, store.text("rules", Store.DEFAULT_RULES), "Домен или маска");
@@ -246,6 +264,8 @@ public final class MainActivity extends Activity {
             LinearLayout item = card(app.label());
             String reason = AppCatalog.reason(this, store, app.pkg());
             String access = reason == null ? (AppCatalog.isLangame(app.pkg()) && store.bool("langame_weekly", true) ? "По расписанию: пн–чт, 10 минут за неделю" : "Разрешено") : reason;
+            SteamPolicy.Result steam = SteamPolicy.evaluate(app.pkg(), store.bool(SteamPolicy.SETTING, true), java.time.LocalDateTime.now());
+            if (reason == null && steam != null) access = steam.blocked() ? "Steam закрыт до понедельника 00:00" : "По расписанию: Steam закрыт пт–вс";
             paragraph(item, (app.game() ? "Игра · " : "") + (app.system() ? "Системное · " : "") + access + "\n" + app.pkg());
             if (AppCatalog.critical(this, app.pkg())) { paragraph(item, "Необходимая функция телефона — исключена из блокировок"); continue; }
             button(item, "Изменить правило", () -> {
@@ -270,12 +290,17 @@ public final class MainActivity extends Activity {
             button(lock, "Зафиксировать текущие правила", () -> {
                 if (!Recovery.exists(store)) { toast("Сначала создай и сохрани код восстановления"); return; }
                 new AlertDialog.Builder(this).setTitle("Зафиксировать правила?").setMessage("Сохрани код у доверенного человека. После фиксации снять защиту в Фокусе можно только этим кодом.")
-                    .setNegativeButton("Отмена", null).setPositiveButton("Зафиксировать", (d,w) -> { store.lock(); render(); }).show();
+                    .setNegativeButton("Отмена", null).setPositiveButton("Зафиксировать", (d,w) -> { try { store.lock(); render(); } catch (IllegalStateException e) { toast(e.getMessage()); } }).show();
             });
         }
+        LinearLayout time = card("Защита даты и времени");
+        toggle(time, "Закрывать настройки даты и времени при фиксации", TimeSettingsGuard.SETTING, true);
+        paragraph(time, "Перед фиксацией включи в Android автоопределение времени и автоматический часовой пояс. Фокус проверяет оба переключателя и при фиксации закрывает страницу даты и времени, выбор даты, времени и часового пояса. Защита работает через проверку экрана независимо от защиты удаления.");
+        paragraph(time, "Фокус не меняет системное время и не включает автоопределение сам. Если автоопределение уже выключено при обновлении, сними фиксацию по коду, включи оба переключателя и зафиксируй правила снова.");
+        button(time, "Открыть дату и время Android", () -> { if (editable()) startActivity(new Intent(Settings.ACTION_DATE_SETTINGS)); });
         LinearLayout guard = card("Защита от удаления");
         toggle(guard, "Перекрывать попытки удаления при фиксации", "uninstall_guard", false);
-        paragraph(guard, "Работает через включённую проверку экрана, когда правила зафиксированы. Перекрывает страницу «О приложении» и страницу специальных возможностей Фокуса. Закрывает подтверждение удаления Фокуса и системные подтверждения принудительной остановки приложений.");
+        paragraph(guard, "Работает через включённую проверку экрана, когда правила зафиксированы. Перекрывает страницы «О приложении» и специальных возможностей Фокуса. Закрывает страницу его хранилища. Закрывает подтверждение удаления Фокуса и системные подтверждения принудительной остановки приложений.");
         paragraph(guard, "Чтобы менять разрешения или удалить Фокус, сначала открой Фокус и сними фиксацию по коду восстановления. Защита зависит от доставки событий Android: полностью исключить быстрое нажатие и системные способы обхода нельзя.");
         LinearLayout privacy = card("Данные и безопасность");
         paragraph(privacy, "Фокус хранит правила и начало сеансов на устройстве. Сообщения, история посещений и снимки экрана не сохраняются и не отправляются. DNS-запросы при включённом DNS-фильтре уходят выбранному Cloudflare-резолверу по обычному UDP DNS. Проверка адресной строки и Shorts выполняется локально.");

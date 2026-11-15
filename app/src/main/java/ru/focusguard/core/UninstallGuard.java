@@ -5,7 +5,7 @@ import java.util.Locale;
 
 /** Targets Focus removal and its own app-info page; never all of Settings. */
 public final class UninstallGuard {
-    public enum Decision { ALLOW, UNINSTALL, FORCE_STOP, APP_INFO, ACCESSIBILITY, DISABLE_ACCESSIBILITY }
+    public enum Decision { ALLOW, UNINSTALL, FORCE_STOP, APP_INFO, STORAGE, ACCESSIBILITY, DISABLE_ACCESSIBILITY }
     public record Label(String text, boolean actionable) {}
     public static boolean settingsPackage(String pkg) { return "com.android.settings".equals(pkg); }
     public static boolean systemPackage(String pkg) {
@@ -39,6 +39,10 @@ public final class UninstallGuard {
         String text = normalize(label);
         return text.equals("отмена") || text.equals("cancel");
     }
+    private static boolean storageHeading(String text) {
+        return text.equals("хранилище") || text.equals("память") || text.equals("хранилище и кеш") || text.equals("хранилище и кэш")
+            || text.equals("storage") || text.equals("storage & cache") || text.equals("storage and cache");
+    }
     private static String normalize(CharSequence label) {
         return label == null ? "" : label.toString().trim().toLowerCase(Locale.ROOT).replace('ё', 'е')
             .replace('\n', ' ').replace('\r', ' ').replace('\u00a0', ' ');
@@ -50,9 +54,11 @@ public final class UninstallGuard {
         private boolean ownAppName, permissionsRow, storageOrDataRow, forceStopButton;
         private boolean forceStopTitle, forceStopWarning, dialogWindow, cancelLabel;
         private boolean focusService, focusShortcut, switchControl, serviceList, disableServicePrompt;
+        private boolean storageTitle, storageLabel, appVersion, storageUsage, dataSize, cacheSize, totalSize;
         public Scan(String pkg) { this.pkg = pkg; }
         public void markSwitch() { switchControl = true; }
         public void markDialogWindow() { dialogWindow = true; }
+        public void markPageTitle(CharSequence title) { storageTitle |= storageHeading(normalize(title)); }
         public void add(Label label) {
             String text = normalize(label.text());
             ownAppName |= focusAppName(text);
@@ -66,6 +72,12 @@ public final class UninstallGuard {
             permissionsRow |= text.equals("разрешения") || text.equals("разрешения приложения") || text.equals("permissions");
             storageOrDataRow |= text.equals("память") || text.equals("хранилище") || text.equals("использование данных")
                 || text.equals("мобильные данные") || text.equals("storage") || text.equals("data usage");
+            storageLabel |= storageHeading(text);
+            appVersion |= text.startsWith("версия ") || text.startsWith("version ");
+            storageUsage |= text.equals("использовано места") || text.equals("space used") || text.equals("storage used");
+            dataSize |= text.equals("данные") || text.equals("данные пользователя") || text.equals("data") || text.equals("user data");
+            cacheSize |= text.equals("кеш") || text.equals("кэш") || text.equals("cache");
+            totalSize |= text.equals("всего") || text.equals("total");
             forceStopButton |= label.actionable() && forceStopControl(text);
             forceStopTitle |= text.equals("принудительно остановить") || text.equals("принудительно остановить?")
                 || text.equals("остановить приложение?") || text.equals("force stop") || text.equals("force stop?");
@@ -98,6 +110,8 @@ public final class UninstallGuard {
             if (isForceStopDialog()) return Decision.FORCE_STOP;
             if (isAccessibilityScreen()) return Decision.ACCESSIBILITY;
             if (!own) return Decision.ALLOW;
+            if (settingsPackage(pkg) && ownAppName && (storageTitle && appVersion
+                || storageLabel && dataSize && cacheSize && (storageUsage || totalSize))) return Decision.STORAGE;
             // Some Settings windows do not expose their toolbar title. Require the actual name
             // and app-specific rows before treating those windows as the Focus app-info page.
             if (isAppInfoScreen() && (appInfo || ownAppName)) return Decision.APP_INFO;

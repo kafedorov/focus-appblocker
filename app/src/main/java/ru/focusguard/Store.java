@@ -18,9 +18,11 @@ import ru.focusguard.core.MorningPolicy;
 public final class Store {
     public static final String DEFAULT_RULES = "# Точный домен и поддомены задаются отдельно\npornhub.com\n*.pornhub.com\nxvideos.com\n*.xvideos.com\nxnxx.com\n*.xnxx.com\nxhamster.com\n*.xhamster.com\n";
     final SharedPreferences prefs;
+    private final android.content.ContentResolver resolver;
     private final int bootCount;
     private final Set<String> failedSessionSlots = new HashSet<>();
     public Store(Context context) {
+        resolver = context.getContentResolver();
         prefs = context.getSharedPreferences("guard", Context.MODE_PRIVATE);
         bootCount = Settings.Global.getInt(context.getContentResolver(), Settings.Global.BOOT_COUNT, 0);
         // An update cancels old waiting requests while preserving the actual lock state.
@@ -129,6 +131,17 @@ public final class Store {
         return left <= 0 ? null : now.plusNanos(left * 1_000_000L);
     }
     public boolean locked() { return bool("locked", false); }
-    public void lock() { prefs.edit().putBoolean("locked", true).commit(); }
+    public boolean automaticTimeEnabled() {
+        try {
+            return ru.focusguard.core.TimeSettingsGuard.automaticReady(
+                Settings.Global.getInt(resolver, Settings.Global.AUTO_TIME, 0),
+                Settings.Global.getInt(resolver, Settings.Global.AUTO_TIME_ZONE, 0));
+        } catch (SecurityException e) { return false; }
+    }
+    public void lock() {
+        if (bool(ru.focusguard.core.TimeSettingsGuard.SETTING, true) && !automaticTimeEnabled())
+            throw new IllegalStateException("Перед фиксацией включи автоопределение времени и автоматический часовой пояс в Android.");
+        if (!prefs.edit().putBoolean("locked", true).commit()) throw new IllegalStateException("Не удалось сохранить фиксацию.");
+    }
     public void unlock() { prefs.edit().putBoolean("locked", false).commit(); }
 }
